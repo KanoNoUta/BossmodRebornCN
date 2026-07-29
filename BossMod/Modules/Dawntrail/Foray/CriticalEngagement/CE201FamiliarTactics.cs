@@ -2,10 +2,8 @@ namespace BossMod.Dawntrail.Foray.CriticalEngagement.CE201FamiliarTactics;
 
 public enum OID : uint
 {
-    Boss = 0x4B12, // R2.5, BNpcName 14508 (elm gigas)
-    AlabasterBlade = 0x4B13, // R1.25, moving persistent hazard
-    AlabasterBladeVariant = 0x4B18, // R1.25, same blade model; observed BNpcBase variant
-    AlabasterBladeLarge = 0x4C3E, // R2.0, same blade model; observed BNpcBase variant
+    Boss = 0x4BD9, // R2.5, BNpcName 14508 (elm gigas)
+    AlabasterBlade = 0x4BDA, // R1.25, moving persistent hazard
     Helper = 0x233C
 }
 
@@ -43,12 +41,7 @@ sealed class SpinningSweep(BossModule module) : Components.SimpleAOEs(module, (u
 sealed class UnbowedSpirit(BossModule module) : Components.GenericAOEs(module)
 {
     private static readonly AOEShapeCircle Shape = new(4f);
-    private readonly List<Actor>[] _bladeGroups =
-    [
-        module.Enemies((uint)OID.AlabasterBlade),
-        module.Enemies((uint)OID.AlabasterBladeVariant),
-        module.Enemies((uint)OID.AlabasterBladeLarge)
-    ];
+    private readonly List<Actor>[] _bladeGroups = [module.Enemies((uint)OID.AlabasterBlade)];
     private readonly HashSet<ulong> _observedBladeIDs = [];
     private readonly List<AOEInstance> _active = [with(8)];
 
@@ -286,12 +279,12 @@ sealed class FamiliarTacticsStates : StateMachineBuilder
     }
 }
 
-[ModuleInfo(BossModuleInfo.Maturity.WIP,
+[ModuleInfo(BossModuleInfo.Maturity.Contributed,
     StatesType = typeof(FamiliarTacticsStates),
     ObjectIDType = typeof(OID),
     ActionIDType = typeof(AID),
     PrimaryActorOID = (uint)OID.Boss,
-    Contributors = "The Combat Reborn Team",
+    Contributors = "KanoNoUta",
     Expansion = BossModuleInfo.Expansion.Dawntrail,
     Category = BossModuleInfo.Category.Foray,
     GroupType = BossModuleInfo.GroupType.CriticalEngagement,

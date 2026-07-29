@@ -734,7 +734,7 @@ sealed class TinyMageStates : StateMachineBuilder {
     }
 }
 
-[ModuleInfo(BossModuleInfo.Maturity.WIP,
+[ModuleInfo(BossModuleInfo.Maturity.Contributed,
     StatesType = typeof(TinyMageStates),
     ConfigType = null, // replace null with typeof(TinyMageConfig) if applicable
     ObjectIDType = typeof(OID),
@@ -743,7 +743,7 @@ sealed class TinyMageStates : StateMachineBuilder {
     TetherIDType = typeof(TetherID),
     IconIDType = null, // replace null with typeof(IconID) if applicable
     PrimaryActorOID = (uint)OID.TinyMage,
-    Contributors = "Equilius",
+    Contributors = "KanoNoUta",
     Expansion = BossModuleInfo.Expansion.Dawntrail,
     Category = BossModuleInfo.Category.Foray,
     GroupType = BossModuleInfo.GroupType.CriticalEngagement,
