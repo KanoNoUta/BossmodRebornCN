@@ -25,14 +25,29 @@ abstract class ReplayValidatedCastAOEs(BossModule module) : Components.GenericAO
     private readonly HashSet<uint> _seenGlobalSequences = [];
 
     protected abstract AOEConfig? ConfigFor(uint actionID);
+    protected virtual int MaxDisplayed => int.MaxValue;
+    protected virtual int MaxRisky => int.MaxValue;
+    protected virtual double RiskyActivationWindow => double.PositiveInfinity;
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
     {
         PruneExpired();
         _displayed.Clear();
-        foreach (var entry in _pending)
+        var count = Math.Min(_pending.Count, MaxDisplayed);
+        var useRiskLimit = MaxRisky != int.MaxValue || !double.IsPositiveInfinity(RiskyActivationWindow);
+        var riskyDeadline = !double.IsPositiveInfinity(RiskyActivationWindow) && count > 0
+            ? _pending[0].AOE.Activation.AddSeconds(RiskyActivationWindow)
+            : DateTime.MaxValue;
+        for (var i = 0; i < count; ++i)
         {
-            _displayed.Add(entry.AOE);
+            var aoe = _pending[i].AOE;
+            if (useRiskLimit)
+            {
+                var imminent = i < MaxRisky && aoe.Activation <= riskyDeadline;
+                aoe.Color = imminent ? Colors.Danger : Colors.AOE;
+                aoe.Risky = imminent;
+            }
+            _displayed.Add(aoe);
         }
         return CollectionsMarshal.AsSpan(_displayed);
     }
@@ -141,7 +156,7 @@ abstract class ReplayValidatedCastAOEs(BossModule module) : Components.GenericAO
 // entire arena unsafe. This also survives CastInfo re-sync packets from accelerated replays.
 abstract class ReplayValidatedOppositeAOEs(BossModule module) : Components.GenericAOEs(module)
 {
-    protected readonly record struct SequenceConfig(AOEShape FirstShape, AOEShape SecondShape, uint SecondActionID, double SecondDelay);
+    protected readonly record struct SequenceConfig(AOEShape FirstShape, AOEShape SecondShape, uint SecondActionID, double SecondDelay, Angle FirstRotationOffset = default);
 
     private sealed class Sequence(uint firstActionID, uint secondActionID, ulong actorID, AOEInstance first, AOEInstance second)
     {
@@ -184,10 +199,12 @@ abstract class ReplayValidatedOppositeAOEs(BossModule module) : Components.Gener
             return;
 
         _sequences.RemoveAll(sequence => sequence.ActorID == caster.InstanceID && sequence.FirstActionID == spell.Action.ID);
+        var firstRotation = spell.Rotation + config.FirstRotationOffset;
+        var secondRotation = firstRotation + 180f.Degrees();
         var secondActivation = activation.AddSeconds(config.SecondDelay);
         _sequences.Add(new(spell.Action.ID, config.SecondActionID, caster.InstanceID,
-            new(config.FirstShape, caster.Position, spell.Rotation, activation, actorID: caster.InstanceID, shapeDistance: config.FirstShape.Distance(caster.Position, spell.Rotation)),
-            new(config.SecondShape, caster.Position, spell.Rotation + 180f.Degrees(), secondActivation, actorID: caster.InstanceID, shapeDistance: config.SecondShape.Distance(caster.Position, spell.Rotation + 180f.Degrees()))));
+            new(config.FirstShape, caster.Position, firstRotation, activation, actorID: caster.InstanceID, shapeDistance: config.FirstShape.Distance(caster.Position, firstRotation)),
+            new(config.SecondShape, caster.Position, secondRotation, secondActivation, actorID: caster.InstanceID, shapeDistance: config.SecondShape.Distance(caster.Position, secondRotation))));
     }
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell)

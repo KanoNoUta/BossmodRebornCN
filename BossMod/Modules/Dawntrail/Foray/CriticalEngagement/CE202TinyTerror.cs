@@ -17,6 +17,7 @@ public enum OID : uint {
 }
 
 public enum AID : uint {
+    ElectricBoundary = 0xBFA1, // TinyMageHelper, persistent outer deathwall; observed hits at 18.1-24.4y
     AutoAttack = 48305, // TinyMage->player, no cast, single-target
     TinyWarp = 48331, // TinyMage->location, no cast, single-target
     TinyThunderIIIRaidwide = 48329, // TinyMage->self, 5.0s cast, single-target
@@ -75,118 +76,51 @@ public enum TetherID : uint {
 
 sealed class TinyThunderIII(BossModule module) : Components.RaidwideCast(module, (uint)AID.TinyThunderIIIRaidwide);
 
-sealed class TinyQuake(BossModule module) : Components.GenericAOEs(module) {
-    private readonly List<AOEInstance> aoes = [];
+// The center controller pulses throughout the encounter. Eleven recorded damage events place the
+// dangerous band at 18.1-24.4y from center, so show the outer two yalms inside the nominal arena.
+sealed class ElectricBoundary(BossModule module) : Components.GenericAOEs(module) {
+    private static readonly AOEShapeDonut Shape = new(18f, 25f);
+    private readonly AOEInstance[] aoe = [new(Shape, module.Arena.Center)];
 
-    public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
-        if (spell.Action.ID == (uint)AID.TinyQuakeIIIInner) {
-            aoes.Add(new(new AOEShapeCircle(10.0f), caster.Position, caster.Rotation, Module.CastFinishAt(spell)));
-        }
-
-        if (spell.Action.ID == (uint)AID.TinyQuakeIIIMiddle) {
-            aoes.Add(new(new AOEShapeDonut(10.0f, 20.0f), caster.Position, caster.Rotation, Module.CastFinishAt(spell)));
-        }
-
-        if (spell.Action.ID == (uint)AID.TinyQuakeIIIOuter) {
-            aoes.Add(new(new AOEShapeDonut(20.0f, 30.0f), caster.Position, caster.Rotation, Module.CastFinishAt(spell)));
-        }
-    }
-
-    public override void OnEventCast(Actor caster, ActorCastEvent spell) {
-        if (spell.Action.ID is (uint)AID.TinyQuakeIIIInner or (uint)AID.TinyQuakeIIIMiddle or (uint)AID.TinyQuakeIIIOuter) {
-            aoes.Sort((a, b) => a.Activation.CompareTo(b.Activation));
-            if (aoes.Count > 0) {
-                aoes.RemoveAt(0);
-            }
-        }
-    }
-
-    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) {
-        int show = 0;
-        var currentAOEs = aoes.OrderBy(a => a.Activation).Take(2).ToList();
-
-        foreach (ref var aoe in CollectionsMarshal.AsSpan(currentAOEs)) {
-            aoe.Color = show == 0 ? Colors.Danger : Colors.AOE;
-            aoe.Risky = show == 0;
-            show++;
-        }
-
-        return CollectionsMarshal.AsSpan(currentAOEs);
-    }
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => aoe;
 }
 
-sealed class DiminutiveDualcast(BossModule module) : Components.GenericAOEs(module) {
-    private readonly List<AOEInstance> aoes = [];
+sealed class TinyQuake(BossModule module) : ReplayValidatedCastAOEs(module) {
+    private static readonly AOEShapeCircle Inner = new(10.0f);
+    private static readonly AOEShapeDonut Middle = new(10.0f, 20.0f);
+    private static readonly AOEShapeDonut Outer = new(20.0f, 30.0f);
 
-    public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
-        if (spell.Action.ID == (uint)AID.TinyBlizzardIII) {
-            aoes.Add(new(new AOEShapeCone(40.0f, 30.0f.Degrees()), caster.Position, caster.Rotation, Module.CastFinishAt(spell)));
-        }
+    protected override int MaxDisplayed => 2;
+    protected override int MaxRisky => 1;
 
-        if (spell.Action.ID == (uint)AID.TinyFireIII) {
-            aoes.Add(new(new AOEShapeCircle(14.0f), caster.Position, caster.Rotation, Module.CastFinishAt(spell)));
-        }
-    }
-
-    public override void OnEventCast(Actor caster, ActorCastEvent spell) {
-        if (spell.Action.ID is (uint)AID.TinyBlizzardIII or (uint)AID.TinyFireIII) {
-            aoes.Sort((a, b) => a.Activation.CompareTo(b.Activation));
-            if (aoes.Count > 0) {
-                aoes.RemoveAt(0);
-            }
-        }
-    }
-
-    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) {
-        var currentAOEs = aoes.OrderBy(a => a.Activation).Take(4).ToList();
-        if (currentAOEs.Count == 0) {
-            return [];
-        }
-
-        var waveTimer = currentAOEs[0].Activation.AddSeconds(0.2f);
-
-        foreach (ref var aoe in CollectionsMarshal.AsSpan(currentAOEs)) {
-            var imminent = aoe.Activation <= waveTimer;
-            aoe.Color = imminent ? Colors.Danger : Colors.AOE;
-            aoe.Risky = imminent;
-        }
-
-        return CollectionsMarshal.AsSpan(currentAOEs);
-    }
+    protected override AOEConfig? ConfigFor(uint actionID) => actionID switch {
+        (uint)AID.TinyQuakeIIIInner => new(Inner),
+        (uint)AID.TinyQuakeIIIMiddle => new(Middle),
+        (uint)AID.TinyQuakeIIIOuter => new(Outer),
+        _ => null
+    };
 }
 
-sealed class TinyMeteor(BossModule module) : Components.GenericAOEs(module, (uint)AID.TinyMeteor) {
-    private readonly List<AOEInstance> aoes = [];
+sealed class DiminutiveDualcast(BossModule module) : ReplayValidatedCastAOEs(module) {
+    private static readonly AOEShapeCone Blizzard = new(40.0f, 30.0f.Degrees());
+    private static readonly AOEShapeCircle Fire = new(14.0f);
 
-    public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
-        if (spell.Action.ID == (uint)AID.TinyMeteor) {
-            aoes.Add(new(new AOEShapeCircle(6.0f), spell.LocXZ, spell.Rotation, Module.CastFinishAt(spell)));
-            aoes.Sort((a, b) => a.Activation.CompareTo(b.Activation));
-        }
-    }
+    protected override int MaxDisplayed => 4;
+    protected override double RiskyActivationWindow => 0.2d;
 
-    public override void OnEventCast(Actor caster, ActorCastEvent spell) {
-        if (spell.Action.ID == (uint)AID.TinyMeteor) {
-            ++NumCasts;
-            aoes.RemoveAll(aoe => aoe.Origin.AlmostEqual(spell.TargetXZ, 0.5f));
-        }
-    }
+    protected override AOEConfig? ConfigFor(uint actionID) => actionID switch {
+        (uint)AID.TinyBlizzardIII => new(Blizzard),
+        (uint)AID.TinyFireIII => new(Fire),
+        _ => null
+    };
+}
 
-    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) {
-        if (aoes.Count == 0) {
-            return [];
-        }
+sealed class TinyMeteor(BossModule module) : ReplayValidatedCastAOEs(module) {
+    private static readonly AOEShapeCircle Shape = new(6.0f);
 
-        var waveTimer = aoes[0].Activation.AddSeconds(0.2f);
+    protected override double RiskyActivationWindow => 0.2d;
 
-        foreach (ref var aoe in CollectionsMarshal.AsSpan(aoes)) {
-            var imminent = aoe.Activation <= waveTimer;
-            aoe.Color = imminent ? Colors.Danger : Colors.AOE;
-            aoe.Risky = imminent;
-        }
-
-        return CollectionsMarshal.AsSpan(aoes);
-    }
+    protected override AOEConfig? ConfigFor(uint actionID) => actionID == (uint)AID.TinyMeteor ? new(Shape, true) : null;
 }
 
 // TODO add timers - its not 60 seconds since it goes faster depending on the number of actors around it
@@ -721,6 +655,7 @@ sealed class HolyCombo(BossModule module) : Components.GenericKnockback(module) 
 sealed class TinyMageStates : StateMachineBuilder {
     public TinyMageStates(BossModule module) : base(module) {
         TrivialPhase()
+            .ActivateOnEnter<ElectricBoundary>()
             .ActivateOnEnter<TinyThunderIII>()
             .ActivateOnEnter<TinyQuake>()
             .ActivateOnEnter<DiminutiveDualcast>()

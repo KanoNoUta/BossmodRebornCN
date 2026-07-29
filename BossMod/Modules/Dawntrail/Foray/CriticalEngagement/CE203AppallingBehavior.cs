@@ -12,6 +12,7 @@ public enum OID : uint
 
 public enum AID : uint
 {
+    ElectricBoundary = 0xC26B, // anchor, persistent outer deathwall; observed hits at 18.6-19.7y
     Summon = 0xC26C,
     EsotericInstruction = 0xC26D,
     EsotericInstructionReverse = 0xC26E,
@@ -40,6 +41,17 @@ public enum AID : uint
     Plaincracker = 0xC53C,
     PlaincrackerAOE = 0xC53D, // helper, 15y circle
     AutoAttack = 0xC53E
+}
+
+// The controller at arena center pulses the electric deathwall throughout the encounter. The
+// recorded victims were 18.6y and 19.7y from center, so expose the dangerous outer two yalms
+// instead of relying on the arena outline alone.
+sealed class ElectricBoundary(BossModule module) : Components.GenericAOEs(module)
+{
+    private static readonly AOEShapeDonut Shape = new(18f, 25f);
+    private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
 }
 
 sealed class AppallingAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
@@ -72,6 +84,7 @@ sealed class AppallingBehaviorStates : StateMachineBuilder
     public AppallingBehaviorStates(BossModule module) : base(module)
     {
         TrivialPhase()
+            .ActivateOnEnter<ElectricBoundary>()
             .ActivateOnEnter<AppallingAOEs>()
             .ActivateOnEnter<DeathRoulette>()
             .ActivateOnEnter<GreatWhirlwind>();

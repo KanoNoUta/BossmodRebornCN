@@ -5,6 +5,8 @@ namespace BossMod.Dawntrail.Foray.CriticalEngagement.CE204AlabasterGuardian;
 public enum OID : uint
 {
     Boss = 0x4BBE, // R2.5, BNpcName 14509, Alabaster Blade
+    AlabasterColossus = 0x4BBF, // R3.0, BNpcName 14510, four spawned command adds
+    LightMagicka = 0x4BC0, // R1.0, BNpcName 14511
     Helper = 0x233C
 }
 
@@ -13,8 +15,10 @@ public enum AID : uint
     Summon = 0xB832,
     FourfoldCommand = 0xB833,
     AttackCommand = 0xB834,
+    HomageLong = 0xB835, // colossus, 12.0s cast, 40y 90-degree cone
+    HomageShort = 0xB836, // colossus, 3.0s cast, 40y 90-degree cone
     SummonOrbs = 0xB837,
-    FabricatedHoly = 0xB839, // boss->self, raidwide
+    FabricatedHolyHit = 0xB839, // helper, no cast, raidwide damage
     MagicGust = 0xB83B, // helper, 50y long, 10y wide rect
     MagicStone = 0xB83C, // helper, 40y 60-degree cone
     MagicTornado = 0xB83D, // helper->location, 5y circle
@@ -24,17 +28,20 @@ public enum AID : uint
     SweepLeft = 0xB841,
     MagicStorm = 0xB842, // helper, 50y long, 10y wide rect
     StoneSwordShockwave = 0xB843, // boss->self, raidwide visual
-    StoneSwordShockwaveHit = 0xB844
+    StoneSwordShockwaveHit = 0xB844,
+    FabricatedHoly = 0xBA8D // boss->self, 32.0s cast, raidwide visual
 }
 
 sealed class AlabasterAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 {
     private static readonly AOEShapeRect Line = new(50f, 5f);
+    private static readonly AOEShapeCone Homage = new(40f, 45f.Degrees());
     private static readonly AOEShapeCone Stone = new(40f, 30f.Degrees());
     private static readonly AOEShapeCircle Tornado = new(5f);
 
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
+        (uint)AID.HomageLong or (uint)AID.HomageShort => new(Homage),
         (uint)AID.MagicGust or (uint)AID.MagicStorm => new(Line),
         (uint)AID.MagicStone => new(Stone),
         (uint)AID.MagicTornado => new(Tornado, true),
@@ -48,8 +55,10 @@ sealed class AlabasterSlashes(BossModule module) : ReplayValidatedOppositeAOEs(m
 
     protected override SequenceConfig? ConfigFor(uint firstActionID) => firstActionID switch
     {
-        (uint)AID.RightLeftSlash => new(Half, Half, (uint)AID.SweepRight, 1.7d),
-        (uint)AID.LeftRightSlash => new(Half, Half, (uint)AID.SweepLeft, 1.7d),
+        // The cast rotation is the boss facing; the first slash is centered on the named side.
+        // Replay events confirm B83E -> B841 and B83F -> B840 for the follow-up hit.
+        (uint)AID.RightLeftSlash => new(Half, Half, (uint)AID.SweepLeft, 1.7d, 90f.Degrees()),
+        (uint)AID.LeftRightSlash => new(Half, Half, (uint)AID.SweepRight, 1.7d, -90f.Degrees()),
         _ => null
     };
 }

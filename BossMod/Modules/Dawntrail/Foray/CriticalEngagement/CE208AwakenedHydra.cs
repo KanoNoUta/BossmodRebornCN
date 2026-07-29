@@ -5,6 +5,8 @@ namespace BossMod.Dawntrail.Foray.CriticalEngagement.CE208AwakenedHydra;
 public enum OID : uint
 {
     Boss = 0x4BC5, // R3.6, BNpcName 14523, magicked hydra
+    LightSphere = 0x4BC6, // R1.0, BNpcName 14524
+    FireSphere = 0x4BC7, // R1.0, BNpcName 14525
     Helper = 0x233C
 }
 
@@ -16,6 +18,8 @@ public enum AID : uint
     ElementalSpill3 = 0xB853,
     ElementalSpill4 = 0xB854,
     ElementalSpill5 = 0xB855, // helper->location, 6y circles
+    CrimsonRay = 0xB856, // fire sphere, 70y long, 4y wide rect
+    BlindingFlash = 0xB857, // light sphere, gaze
     RadiantIce = 0xB858, // 40y 20-degree cone
     ToxinScatter = 0xB859,
     Discharge = 0xB85A, // 10y circle
@@ -41,6 +45,7 @@ public enum AID : uint
 sealed class HydraAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 {
     private static readonly AOEShapeCircle Spill = new(6f);
+    private static readonly AOEShapeRect CrimsonRay = new(70f, 2f);
     private static readonly AOEShapeCone Ice = new(40f, 10f.Degrees());
     private static readonly AOEShapeCircle Discharge = new(10f);
     private static readonly AOEShapeDonut InnerRing = new(10f, 20f);
@@ -51,6 +56,7 @@ sealed class HydraAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
         >= (uint)AID.ElementalSpill1 and <= (uint)AID.ElementalSpill5 => new(Spill, true),
+        (uint)AID.CrimsonRay => new(CrimsonRay),
         (uint)AID.RadiantIce => new(Ice),
         (uint)AID.Discharge => new(Discharge),
         (uint)AID.RingLightningInner => new(InnerRing),
@@ -64,6 +70,7 @@ sealed class HydraAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 // B86A is emitted by several helpers and splits the damage packets; the boss visual is the
 // stable cast-bar warning for the unavoidable hit.
 sealed class QuintetRoar(BossModule module) : Components.RaidwideCast(module, (uint)AID.QuintetRoar);
+sealed class BlindingFlash(BossModule module) : Components.CastGaze(module, (uint)AID.BlindingFlash);
 
 sealed class AwakenedHydraStates : StateMachineBuilder
 {
@@ -71,6 +78,7 @@ sealed class AwakenedHydraStates : StateMachineBuilder
     {
         TrivialPhase()
             .ActivateOnEnter<HydraAOEs>()
+            .ActivateOnEnter<BlindingFlash>()
             .ActivateOnEnter<QuintetRoar>();
     }
 }

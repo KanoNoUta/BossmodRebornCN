@@ -7,11 +7,13 @@ public enum OID : uint
 {
     Boss = 0x4BE1, // R3.2, BNpcName 14505, kidnapper
     Hurricane = 0x4BE2,
+    Anchor = 0x4BE4, // non-targetable arena controller at center
     Helper = 0x233C
 }
 
 public enum AID : uint
 {
+    WindBoundary = 0xB94B, // anchor, persistent 20-30y outer deathwall
     HurricaneVisual = 0xB94C,
     HurricaneKnockback = 0xB94D, // 5y away knockback
     RendingWindVisual = 0xB94E,
@@ -25,8 +27,16 @@ public enum AID : uint
     CycloneRingVisual = 0xB957,
     Downburst = 0xB958, // location, 15y circle
     CycloneRing = 0xB959, // 10-60y donut
-    HurricaneRaidwide = 0xBBF8,
+    HurricaneHit = 0xBBF8, // helpers, no cast, raidwide damage
     GustTelegraph = 0xBC7A // helper, 60y long, 60y wide rect
+}
+
+sealed class WindBoundary(BossModule module) : Components.GenericAOEs(module)
+{
+    private static readonly AOEShapeDonut Shape = new(20f, 30f);
+    private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
 }
 
 sealed class KidnapperAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
@@ -67,17 +77,20 @@ sealed class HurricaneKnockbacks(BossModule module) : Components.GenericKnockbac
 
 // BC7A is the cast-bar telegraph for B950, whose action effect is a 24y SourceForward knockback.
 sealed class GustKnockback(BossModule module) : Components.SimpleKnockbacks(module, (uint)AID.GustTelegraph, 24f, shape: new AOEShapeRect(60f, 30f), kind: Kind.DirForward);
-sealed class HurricaneRaidwide(BossModule module) : Components.RaidwideCast(module, (uint)AID.HurricaneRaidwide);
+// B94C resolves into the BBF8 helper raidwide about 0.9s after the boss cast. BC7A similarly
+// resolves into B950 while applying the directional knockback.
+sealed class KidnapperRaidwides(BossModule module) : Components.RaidwideCasts(module, [(uint)AID.HurricaneVisual, (uint)AID.GustTelegraph]);
 
 sealed class IslandKidnapperStates : StateMachineBuilder
 {
     public IslandKidnapperStates(BossModule module) : base(module)
     {
         TrivialPhase()
+            .ActivateOnEnter<WindBoundary>()
             .ActivateOnEnter<KidnapperAOEs>()
             .ActivateOnEnter<HurricaneKnockbacks>()
             .ActivateOnEnter<GustKnockback>()
-            .ActivateOnEnter<HurricaneRaidwide>();
+            .ActivateOnEnter<KidnapperRaidwides>();
     }
 }
 

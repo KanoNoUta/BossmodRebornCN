@@ -29,10 +29,13 @@ public enum AID : uint
     SpinningSweep = 47541, // Boss->self, 6.0s cast, range 40 120-degree cone
 
     InspiritedImpactVisual = 47542, // Boss->self, 3.0s cast, single-target visual
-    InspiritedImpact = 47543 // helper->self, 9.6s cast, range 25 circle
+    InspiritedImpact = 47543, // helper->self, 9.6s cast, range 25 circle
+
+    AncientStorm = 47544, // boss->self, raidwide visual
+    AncientStormHit = 48041 // helpers, raidwide damage
 }
 
-sealed class HyperconductivePlasma(BossModule module) : Components.RaidwideCast(module, (uint)AID.HyperconductivePlasma);
+sealed class FamiliarRaidwides(BossModule module) : Components.RaidwideCasts(module, [(uint)AID.HyperconductivePlasma, (uint)AID.AncientStorm]);
 sealed class BatteringArms(BossModule module) : Components.SingleTargetDelayableCast(module, (uint)AID.BatteringArms);
 sealed class SpinningSweep(BossModule module) : Components.SimpleAOEs(module, (uint)AID.SpinningSweep, new AOEShapeCone(40f, 60f.Degrees()));
 
@@ -271,7 +274,7 @@ sealed class FamiliarTacticsStates : StateMachineBuilder
     public FamiliarTacticsStates(BossModule module) : base(module)
     {
         TrivialPhase()
-            .ActivateOnEnter<HyperconductivePlasma>()
+            .ActivateOnEnter<FamiliarRaidwides>()
             .ActivateOnEnter<BatteringArms>()
             .ActivateOnEnter<UnbowedSpirit>()
             .ActivateOnEnter<BladePatterns>()

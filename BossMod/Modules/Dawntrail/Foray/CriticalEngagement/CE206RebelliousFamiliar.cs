@@ -7,14 +7,16 @@ public enum OID : uint
 {
     Boss = 0x4C4F, // R3.8, BNpcName 14791, cornered gemstone
     YellowGem = 0x4C50,
+    BoundaryController = 0x4D88, // non-targetable controller at arena center
     Helper = 0x233C
 }
 
 public enum AID : uint
 {
+    LethalBoundary = 0xBFD0, // controller, persistent out-of-bounds kill field
     YellowGemstones = 0xBC98,
-    YellowGemActive = 0xBC99,
-    YellowGemInactive = 0xBC9A,
+    YellowGemActiveVisual = 0xBC99, // yellow gem->location, 3.0s cast, no damage event
+    TopazRay = 0xBC9A, // yellow gem->location, 3.0s cast, range 4 circle
     RubyLight = 0xBC9C,
     RubyReflectionShort = 0xBC9D, // helper, 20y long, 20y wide rect
     RubyReflectionLong1 = 0xBC9E, // helper, 40y long, 40y wide rect
@@ -34,6 +36,17 @@ public enum AID : uint
     RavenousGodsAsideHit = 0xC163
 }
 
+// BFD0 repeatedly deals lethal damage from the center controller. In the replay, 28/29 target
+// samples were at least 19.8y from center; keep the nominal 20y arena edge instead of widening it
+// around the one high-speed stale-position outlier at 14.3y.
+sealed class LethalBoundary(BossModule module) : Components.GenericAOEs(module)
+{
+    private static readonly AOEShapeDonut Shape = new(20f, 35f);
+    private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
+}
+
 sealed class ClawTailCombo(BossModule module) : ReplayValidatedOppositeAOEs(module)
 {
     private static readonly AOEShapeCone Claw = new(45f, 90f.Degrees());
@@ -42,9 +55,17 @@ sealed class ClawTailCombo(BossModule module) : ReplayValidatedOppositeAOEs(modu
     protected override SequenceConfig? ConfigFor(uint firstActionID) => firstActionID switch
     {
         (uint)AID.ClawThenTail => new(Claw, Tail, (uint)AID.ClawThenTailSecond, 2d),
-        (uint)AID.TailThenClaw => new(Tail, Claw, (uint)AID.TailThenClawSecond, 2d),
+        // Tail resolves behind the boss first, then claw resolves in front.
+        (uint)AID.TailThenClaw => new(Tail, Claw, (uint)AID.TailThenClawSecond, 2d, 180f.Degrees()),
         _ => null
     };
+}
+
+sealed class TopazRay(BossModule module) : ReplayValidatedCastAOEs(module)
+{
+    private static readonly AOEShapeCircle Shape = new(4f);
+
+    protected override AOEConfig? ConfigFor(uint actionID) => actionID == (uint)AID.TopazRay ? new(Shape, true) : null;
 }
 
 sealed class CircularKnockback(BossModule module) : Components.SimpleKnockbacks(module, (uint)AID.CircularKnockbackTelegraph, 30f, shape: new AOEShapeCircle(60f));
@@ -87,7 +108,7 @@ sealed class KnockAside(BossModule module) : Components.GenericKnockback(module)
 
     public override void OnActorDestroyed(Actor actor) => _casters.RemoveAll(source => source.ActorID == actor.InstanceID);
 }
-sealed class GemstoneRaidwides(BossModule module) : Components.RaidwideCasts(module, [(uint)AID.RavenousGods, (uint)AID.Howl]);
+sealed class GemstoneRaidwides(BossModule module) : Components.RaidwideCasts(module, [(uint)AID.RubyLight, (uint)AID.RavenousGods, (uint)AID.Howl]);
 sealed class RubyReflectionHint(BossModule module) : Components.CastHint(module, (uint)AID.RubyLight, "Ruby reflection - watch the gemstone lines");
 
 sealed class RebelliousFamiliarStates : StateMachineBuilder
@@ -95,7 +116,9 @@ sealed class RebelliousFamiliarStates : StateMachineBuilder
     public RebelliousFamiliarStates(BossModule module) : base(module)
     {
         TrivialPhase()
+            .ActivateOnEnter<LethalBoundary>()
             .ActivateOnEnter<ClawTailCombo>()
+            .ActivateOnEnter<TopazRay>()
             .ActivateOnEnter<CircularKnockback>()
             .ActivateOnEnter<KnockAside>()
             .ActivateOnEnter<GemstoneRaidwides>()

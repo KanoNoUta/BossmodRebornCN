@@ -6,6 +6,7 @@ namespace BossMod.Dawntrail.Foray.CriticalEngagement.CE205GluttonousCursefiend;
 public enum OID : uint
 {
     Boss = 0x4C4B, // R3.0, BNpcName 14790, Algol
+    Controller = 0x4D87, // non-targetable mechanic and arena controller
     Helper = 0x233C
 }
 
@@ -25,6 +26,7 @@ public enum AID : uint
     OnionMiasma2 = 0xBBF0,
     SpinningDrawInCone = 0xBBF1, // 30y 30-degree cone
     SpinningDrawIn = 0xBBF2,
+    MiasmaBoundary = 0xBBF6, // controller, persistent 20-30y outer deathwall
     GreatMiasmaCannon1 = 0xBBF4, // 40y long, 50y wide rect
     CorruptMiasma1 = 0xBBF5, // 12y circle
     CursevoiceAlt = 0xBF4B,
@@ -37,6 +39,14 @@ public enum AID : uint
     DevourAlt2 = 0xC523,
     DevourShort = 0xC525, // 8y 120-degree cone
     SpinningDrawInAlt = 0xC6FE
+}
+
+sealed class MiasmaBoundary(BossModule module) : Components.GenericAOEs(module)
+{
+    private static readonly AOEShapeDonut Shape = new(20f, 30f);
+    private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
 }
 
 sealed class AlgolAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
@@ -103,6 +113,7 @@ sealed class GluttonousCursefiendStates : StateMachineBuilder
     public GluttonousCursefiendStates(BossModule module) : base(module)
     {
         TrivialPhase()
+            .ActivateOnEnter<MiasmaBoundary>()
             .ActivateOnEnter<AlgolAOEs>()
             .ActivateOnEnter<AlgolDrawIn>()
             .ActivateOnEnter<AlgolRaidwides>();
