@@ -42,6 +42,83 @@ public enum AID : uint
     MultipleBreaths4 = 0xC5F3
 }
 
+// ElementalSpill1 leaves a small poison pool at its resolved location. ToxinScatter then ticks
+// once per second at that same position for roughly ten seconds. The tick helpers are recycled
+// between waves, so tracking helper instance IDs would keep stale pools or create duplicates;
+// key the pools by position instead. Only the spill is authoritative for creating a pool: old
+// high-speed replays can retain stale helper coordinates on unmatched ticks, so those ticks may
+// refresh a nearby known pool but must never create a new one.
+sealed class ToxinPools(BossModule module) : Components.GenericAOEs(module)
+{
+    private static readonly AOEShapeCircle Shape = new(1f);
+    private const float PositionTolerance = 0.75f;
+    private const double PredictedLifetime = 10.5d;
+    private const double TickLifetime = 1.25d;
+
+    private sealed class Pool(WPos origin, DateTime activation, DateTime expiresAt)
+    {
+        public readonly WPos Origin = origin;
+        public readonly DateTime Activation = activation;
+        public DateTime ExpiresAt = expiresAt;
+    }
+
+    private readonly List<Pool> _pools = [with(4)];
+    private readonly List<AOEInstance> _active = [with(4)];
+    private readonly HashSet<uint> _seenGlobalSequences = [];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
+    {
+        PruneExpired();
+        _active.Clear();
+        foreach (var pool in _pools)
+        {
+            _active.Add(new(Shape, pool.Origin, activation: pool.Activation, shapeDistance: Shape.Distance(pool.Origin, default)));
+        }
+        return CollectionsMarshal.AsSpan(_active);
+    }
+
+    public override void Update() => PruneExpired();
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
+    {
+        if (spell.Action.ID is not ((uint)AID.ElementalSpill1) and not ((uint)AID.ToxinScatter)
+            || spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence))
+        {
+            return;
+        }
+
+        var now = WorldState.CurrentTime;
+        PruneExpired();
+        var origin = caster.Position;
+        var pool = _pools.FirstOrDefault(pool => pool.Origin.InCircle(origin, PositionTolerance));
+        var isSpill = spell.Action.ID == (uint)AID.ElementalSpill1;
+        if (pool == null)
+        {
+            if (isSpill)
+            {
+                _pools.Add(new(origin, now, now.AddSeconds(PredictedLifetime)));
+            }
+        }
+        else
+        {
+            var refreshedExpiry = now.AddSeconds(isSpill ? PredictedLifetime : TickLifetime);
+            // The spill prediction covers the packet gap before the first tick. Once ticks begin,
+            // their cadence is authoritative; assigning (rather than only extending) also keeps
+            // accelerated client-replay captures from retaining pools for ten wall-clock seconds.
+            if (!isSpill || refreshedExpiry > pool.ExpiresAt)
+            {
+                pool.ExpiresAt = refreshedExpiry;
+            }
+        }
+    }
+
+    private void PruneExpired()
+    {
+        var now = WorldState.CurrentTime;
+        _pools.RemoveAll(pool => now > pool.ExpiresAt);
+    }
+}
+
 sealed class HydraAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 {
     private static readonly AOEShapeCircle Spill = new(6f);
@@ -78,6 +155,7 @@ sealed class AwakenedHydraStates : StateMachineBuilder
     {
         TrivialPhase()
             .ActivateOnEnter<HydraAOEs>()
+            .ActivateOnEnter<ToxinPools>()
             .ActivateOnEnter<BlindingFlash>()
             .ActivateOnEnter<QuintetRoar>();
     }

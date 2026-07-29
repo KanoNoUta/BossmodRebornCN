@@ -12,7 +12,7 @@ public enum OID : uint
 
 public enum AID : uint
 {
-    ElectricBoundary = 0xC26B, // anchor, persistent outer deathwall; observed hits at 18.6-19.7y
+    ElectricBoundary = 0xC26B, // anchor, persistent outer deathwall; observed hits at 18.6-24.4y
     Summon = 0xC26C,
     EsotericInstruction = 0xC26D,
     EsotericInstructionReverse = 0xC26E,
@@ -44,7 +44,7 @@ public enum AID : uint
 }
 
 // The controller at arena center pulses the electric deathwall throughout the encounter. The
-// recorded victims were 18.6y and 19.7y from center, so expose the dangerous outer two yalms
+// recorded victims were 18.6-24.4y from center, so expose the dangerous outer two yalms
 // instead of relying on the arena outline alone.
 sealed class ElectricBoundary(BossModule module) : Components.GenericAOEs(module)
 {

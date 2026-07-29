@@ -1,0 +1,77 @@
+using BossMod.Dawntrail.Foray.CriticalEngagement;
+
+namespace BossMod.Dawntrail.Foray.CriticalEngagement.CE209WhatGoesAround;
+
+public enum OID : uint
+{
+    Boss = 0x4BC1, // R3.0, BNpcName 14512, undead mage
+    AncientExplorerSpirit = 0x4BC2, // R1.0, untargetable circle casters
+    AncientPirateSpirit = 0x4BC3, // R1.0, untargetable cross casters
+    Controller = 0x4C75, // arena controller at (224, -860)
+    Helper = 0x233C
+}
+
+public enum AID : uint
+{
+    ArenaControl = 0xB845, // controller->self, no cast, persistent encounter control pulse
+    Necromancy = 0xB846, // boss->self, 3.0s cast, summons spirits
+    SpiritExplosionCircle = 0xB847, // explorer spirit->self, 2.0s cast, range 8 circle
+    SpiritExplosionCross = 0xB848, // pirate spirit->self, 4.0s cast, range 80 width 7 cross
+    MarchOfTheDead = 0xB849, // boss->self, 3.0s cast, visual
+    GrudgeRelease = 0xB84A, // spirit->self, 5.0s cast, range 50 width 5 rect
+    DeployMagicCircle = 0xB84B, // boss->self, 3.0s cast, visual
+    GloomCurrent = 0xB84C, // helper->self, 7.0s cast, range 70 width 12 rect
+    Gloom = 0xB84D, // boss->self, 5.0s cast, range 50 width 50 rect
+    DarkIV = 0xB84E, // boss->self, 5.0s cast, raidwide visual
+    DarkIVHit = 0xB84F, // helpers->players, raidwide damage
+    AutoAttack = 0xC649
+}
+
+// Every avoidable hit in the recording exposes a real cast-start packet from the actor that owns
+// the shape. This includes the staggered 8y grid, the large crosses and all three Gloom Current
+// lanes, so no position or rotation needs to be inferred from the boss visuals.
+sealed class WhatGoesAroundAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
+{
+    private static readonly AOEShapeCircle SpiritCircle = new(8f);
+    private static readonly AOEShapeCross SpiritCross = new(80f, 3.5f);
+    private static readonly AOEShapeRect Grudge = new(50f, 2.5f);
+    private static readonly AOEShapeRect Current = new(70f, 6f);
+    private static readonly AOEShapeRect Gloom = new(50f, 25f);
+
+    protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
+    {
+        (uint)AID.SpiritExplosionCircle => new(SpiritCircle),
+        (uint)AID.SpiritExplosionCross => new(SpiritCross),
+        (uint)AID.GrudgeRelease => new(Grudge),
+        (uint)AID.GloomCurrent => new(Current),
+        (uint)AID.Gloom => new(Gloom),
+        _ => null
+    };
+}
+
+// B84F is split across three helpers. The boss cast is the stable advance warning.
+sealed class DarkIV(BossModule module) : Components.RaidwideCast(module, (uint)AID.DarkIV);
+
+sealed class WhatGoesAroundStates : StateMachineBuilder
+{
+    public WhatGoesAroundStates(BossModule module) : base(module)
+    {
+        TrivialPhase()
+            .ActivateOnEnter<WhatGoesAroundAOEs>()
+            .ActivateOnEnter<DarkIV>();
+    }
+}
+
+[ModuleInfo(BossModuleInfo.Maturity.Contributed,
+    StatesType = typeof(WhatGoesAroundStates),
+    ObjectIDType = typeof(OID),
+    ActionIDType = typeof(AID),
+    PrimaryActorOID = (uint)OID.Boss,
+    Contributors = "KanoNoUta",
+    Expansion = BossModuleInfo.Expansion.Dawntrail,
+    Category = BossModuleInfo.Category.Foray,
+    GroupType = BossModuleInfo.GroupType.CriticalEngagement,
+    GroupID = 1093u,
+    NameID = 57u,
+    SortOrder = 8)]
+public sealed class WhatGoesAround(WorldState ws, Actor primary) : BossModule(ws, primary, new(224f, -860f), new ArenaBoundsCircle(20f));

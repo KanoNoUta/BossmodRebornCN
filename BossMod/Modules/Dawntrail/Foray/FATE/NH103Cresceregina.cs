@@ -33,7 +33,8 @@ sealed class Thunderbolt(BossModule module) : Components.SimpleAOEs(module, (uin
 sealed class NobleBlaster(BossModule module) : Components.SimpleAOEs(module, (uint)AID.NobleBlaster, new AOEShapeRect(50.0f, 2.5f));
 
 sealed class ThunderboltPuddle(BossModule module) : Components.GenericAOEs(module) {
-    private List<AOEInstance> aoes = [];
+    private static readonly AOEShapeCircle Shape = new(10f);
+    private readonly List<AOEInstance> _aoes = [];
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
         switch ((AID)spell.Action.ID) {
@@ -46,7 +47,7 @@ sealed class ThunderboltPuddle(BossModule module) : Components.GenericAOEs(modul
             case AID.ThunderboltPuddle6:
             case AID.ThunderboltPuddle7:
             case AID.ThunderboltPuddle8:
-                aoes.Add(new(new AOEShapeCircle(10.0f), caster.Position, activation: Module.CastFinishAt(spell)));
+                _aoes.Add(new(Shape, spell.LocXZ, activation: Module.CastFinishAt(spell)));
                 break;
         }
     }
@@ -62,8 +63,8 @@ sealed class ThunderboltPuddle(BossModule module) : Components.GenericAOEs(modul
             case AID.ThunderboltPuddle6:
             case AID.ThunderboltPuddle7:
             case AID.ThunderboltPuddle8:
-                if (aoes.Count > 0) {
-                    aoes.RemoveAll(a => a.Origin.AlmostEqual(caster.Position, 0.5f));
+                if (_aoes.Count > 0) {
+                    _aoes.RemoveAll(a => a.Origin.AlmostEqual(caster.Position, 0.5f));
                 }
                 break;
         }
@@ -72,8 +73,8 @@ sealed class ThunderboltPuddle(BossModule module) : Components.GenericAOEs(modul
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) {
         int show = 0;
 
-        aoes.Sort((a, b) => a.Activation.CompareTo(b.Activation));
-        foreach (ref var aoe in CollectionsMarshal.AsSpan(aoes)) {
+        _aoes.Sort((a, b) => a.Activation.CompareTo(b.Activation));
+        foreach (ref var aoe in CollectionsMarshal.AsSpan(_aoes)) {
             if (show == 3) {
                 break;
             }
@@ -83,7 +84,7 @@ sealed class ThunderboltPuddle(BossModule module) : Components.GenericAOEs(modul
             show++;
         }
 
-        return CollectionsMarshal.AsSpan(aoes);
+        return CollectionsMarshal.AsSpan(_aoes);
     }
 }
 
@@ -99,7 +100,7 @@ sealed class CrescereginaStates : StateMachineBuilder {
     }
 }
 
-[ModuleInfo(BossModuleInfo.Maturity.WIP,
+[ModuleInfo(BossModuleInfo.Maturity.Contributed,
     StatesType = typeof(CrescereginaStates),
     ConfigType = null, // replace null with typeof(CrescereginaConfig) if applicable
     ObjectIDType = typeof(OID),
@@ -108,7 +109,7 @@ sealed class CrescereginaStates : StateMachineBuilder {
     TetherIDType = null, // replace null with typeof(TetherID) if applicable
     IconIDType = null, // replace null with typeof(IconID) if applicable
     PrimaryActorOID = (uint)OID.Cresceregina,
-    Contributors = "Equilius",
+    Contributors = "KanoNoUta",
     Expansion = BossModuleInfo.Expansion.Dawntrail,
     Category = BossModuleInfo.Category.Foray,
     GroupType = BossModuleInfo.GroupType.ForayFATE,
