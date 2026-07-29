@@ -100,8 +100,8 @@ sealed class UnbowedSpirit(BossModule module) : Components.GenericAOEs(module)
 sealed class BladePatterns(BossModule module) : Components.GenericAOEs(module)
 {
     private const double WaveWindow = 0.5d;
-    private const double DuplicateWindow = 0.25d;
-    private const double ResolveWindow = 2d;
+    private const double EventResolveTolerance = 0.5d;
+    private const double TombstoneWindow = 1d;
     private const double ExpireDelay = 2d;
 
     private static readonly AOEShapeCircle Circle12 = new(12f);
@@ -116,8 +116,12 @@ sealed class BladePatterns(BossModule module) : Components.GenericAOEs(module)
         public AOEInstance AOE = aoe;
     }
 
+    private readonly record struct ResolvedCast(uint ActionID, ulong ActorID, DateTime Activation, DateTime ExpiresAt);
+
     private readonly List<PendingAOE> _pending = [with(16)];
     private readonly List<AOEInstance> _displayed = [with(8)];
+    private readonly List<ResolvedCast> _resolved = [with(8)];
+    private readonly HashSet<uint> _seenGlobalSequences = [];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
     {
@@ -154,16 +158,30 @@ sealed class BladePatterns(BossModule module) : Components.GenericAOEs(module)
             return;
         }
 
-        var origin = spell.LocXZ.Quantized();
-        var rotation = spell.Rotation;
-        AddOrRefresh(spell.Action.ID, shape, caster.InstanceID, origin, rotation, Module.CastFinishAt(spell));
+        PruneExpired();
+        var activation = Module.CastFinishAt(spell);
+        if (spell.EventHappened || activation <= WorldState.CurrentTime || WasRecentlyResolved(spell.Action.ID, caster.InstanceID, activation))
+        {
+            return;
+        }
+
+        AddOrRefresh(spell.Action.ID, shape, caster.InstanceID, spell.LocXZ, spell.Rotation, activation);
     }
 
     public override void OnCastFinished(Actor caster, ActorCastInfo spell)
     {
         if (ShapeFor(spell.Action.ID) != null)
         {
-            Resolve(spell.Action.ID, caster);
+            var now = WorldState.CurrentTime;
+            var activation = Module.CastFinishAt(spell);
+            RemoveAll(spell.Action.ID, caster.InstanceID);
+            // CastInfo resynchronization emits finish -> start while the cast is still in progress.
+            // Only remember finishes that are actually at the resolution point, otherwise the
+            // immediately following corrected cast-start would be mistaken for a late packet.
+            if (spell.EventHappened || activation <= now.AddSeconds(EventResolveTolerance))
+            {
+                RememberResolved(spell.Action.ID, caster.InstanceID, activation, now);
+            }
         }
     }
 
@@ -171,7 +189,15 @@ sealed class BladePatterns(BossModule module) : Components.GenericAOEs(module)
     {
         if (ShapeFor(spell.Action.ID) != null)
         {
+            if (spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence))
+            {
+                return;
+            }
+
+            var now = WorldState.CurrentTime;
             ++NumCasts;
+            var activation = RemoveResolvedByEvent(spell.Action.ID, caster.InstanceID, now) ?? now;
+            RememberResolved(spell.Action.ID, caster.InstanceID, activation, now);
         }
     }
 
@@ -191,59 +217,59 @@ sealed class BladePatterns(BossModule module) : Components.GenericAOEs(module)
     private void AddOrRefresh(uint actionID, AOEShape shape, ulong actorID, WPos origin, Angle rotation, DateTime activation)
     {
         var replacement = new AOEInstance(shape, origin, rotation, activation, actorID: actorID, shapeDistance: shape.Distance(origin, rotation));
-        foreach (var entry in _pending)
-        {
-            if (entry.ActionID == actionID && entry.AOE.ActorID == actorID && Math.Abs((entry.AOE.Activation - activation).TotalSeconds) <= DuplicateWindow)
-            {
-                entry.AOE = replacement;
-                SortPending();
-                return;
-            }
-        }
-
+        // One actor cannot cast the same action concurrently. Re-sync packets can shift the
+        // activation by more than a small epsilon, so replace the key unconditionally.
+        RemoveAll(actionID, actorID);
         _pending.Add(new(actionID, replacement));
         SortPending();
     }
 
-    private void Resolve(uint actionID, Actor caster)
+    private DateTime? RemoveResolvedByEvent(uint actionID, ulong actorID, DateTime now)
     {
-        var now = WorldState.CurrentTime;
-        var best = FindBest(actionID, now, caster.InstanceID);
-        if (best >= 0)
-        {
-            _pending.RemoveAt(best);
-        }
-    }
-
-    private int FindBest(uint actionID, DateTime now, ulong actorID)
-    {
-        var best = -1;
-        var bestDelta = ResolveWindow;
-        for (var i = 0; i < _pending.Count; ++i)
+        DateTime? activation = null;
+        for (var i = _pending.Count - 1; i >= 0; --i)
         {
             var entry = _pending[i];
-            if (entry.ActionID != actionID || entry.AOE.ActorID != actorID)
+            if (entry.ActionID == actionID && entry.AOE.ActorID == actorID && entry.AOE.Activation <= now.AddSeconds(EventResolveTolerance))
             {
-                continue;
-            }
-
-            var delta = Math.Abs((entry.AOE.Activation - now).TotalSeconds);
-            if (delta <= bestDelta)
-            {
-                best = i;
-                bestDelta = delta;
+                activation = activation == null || entry.AOE.Activation < activation ? entry.AOE.Activation : activation;
+                _pending.RemoveAt(i);
             }
         }
-        return best;
+        return activation;
+    }
+
+    private bool WasRecentlyResolved(uint actionID, ulong actorID, DateTime activation)
+    {
+        foreach (var resolved in _resolved)
+        {
+            if (resolved.ActionID == actionID && resolved.ActorID == actorID && Math.Abs((resolved.Activation - activation).TotalSeconds) <= TombstoneWindow)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void RememberResolved(uint actionID, ulong actorID, DateTime activation, DateTime now)
+    {
+        _resolved.RemoveAll(resolved => resolved.ActionID == actionID && resolved.ActorID == actorID);
+        _resolved.Add(new(actionID, actorID, activation, now.AddSeconds(TombstoneWindow)));
     }
 
     private void PruneExpired()
     {
         var now = WorldState.CurrentTime;
         _pending.RemoveAll(entry => now > entry.AOE.Activation.AddSeconds(ExpireDelay));
+        _resolved.RemoveAll(resolved => now > resolved.ExpiresAt);
     }
 
-    private void RemoveActor(ulong instanceID) => _pending.RemoveAll(entry => entry.AOE.ActorID == instanceID);
+    private void RemoveAll(uint actionID, ulong actorID) => _pending.RemoveAll(entry => entry.ActionID == actionID && entry.AOE.ActorID == actorID);
+    private void RemoveActor(ulong instanceID)
+    {
+        _pending.RemoveAll(entry => entry.AOE.ActorID == instanceID);
+        _resolved.RemoveAll(entry => entry.ActorID == instanceID);
+    }
     private void SortPending() => _pending.Sort((left, right) => left.AOE.Activation.CompareTo(right.AOE.Activation));
 }
 

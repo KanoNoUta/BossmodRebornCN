@@ -303,6 +303,8 @@ sealed class Comet(BossModule module) : BossComponent(module) {
 }
 
 static class TinyMageMechanic {
+    private const float DirectionThreshold = 0.05f;
+
     public static void AddMage(List<Actor> mages, Actor actor, WPos center) {
         if (mages.Any(mage => mage.InstanceID == actor.InstanceID)) {
             return;
@@ -324,6 +326,22 @@ static class TinyMageMechanic {
         mages.RemoveAll(mage => mage.InstanceID == instanceID);
     }
 
+    public static int ObserveDirection(Actor orb, WPos center, ref float previousAngle, ref float angularTravel) {
+        var currentAngle = ClockwiseFromNorth(orb.Position, center);
+        var delta = currentAngle - previousAngle;
+        if (delta > MathF.PI) {
+            delta -= Angle.DoublePI;
+        } else if (delta < -MathF.PI) {
+            delta += Angle.DoublePI;
+        }
+
+        previousAngle = currentAngle;
+        angularTravel += delta;
+        return angularTravel > DirectionThreshold ? 1 : angularTravel < -DirectionThreshold ? -1 : 0;
+    }
+
+    public static float AngleFromNorth(WPos position, WPos center) => ClockwiseFromNorth(position, center);
+
     private static float ClockwiseFromNorth(WPos position, WPos center) {
         var angle = (position - center).ToAngle().Normalized().Rad;
         var result = (MathF.PI - angle) % Angle.DoublePI;
@@ -331,11 +349,14 @@ static class TinyMageMechanic {
     }
 }
 
-// Will blow up 90 degrees anti-clockwise from spawn point
 sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
     private readonly List<Actor> mages = [];
+    private Actor? orb;
     private WPos? start;
     private ulong startActorID;
+    private float previousAngle;
+    private float angularTravel;
+    private int direction;
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
         if (spell.Action.ID == (uint)AID.SmallForOne) {
@@ -347,8 +368,18 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
         if (actor.OID == (uint)OID.TinyApprentice) {
             TinyMageMechanic.AddMage(mages, actor, Arena.Center);
         } else if (actor.OID == (uint)OID.FlareSphereGrow) {
+            orb = actor;
             start = actor.Position;
             startActorID = actor.InstanceID;
+            previousAngle = TinyMageMechanic.AngleFromNorth(actor.Position, Arena.Center);
+            angularTravel = default;
+            direction = default;
+        }
+    }
+
+    public override void Update() {
+        if (orb != null && direction == 0) {
+            direction = TinyMageMechanic.ObserveDirection(orb, Arena.Center, ref previousAngle, ref angularTravel);
         }
     }
 
@@ -367,7 +398,7 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
     }
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) {
-        if (mages.Count != 4 || start == null) {
+        if (mages.Count != 4 || start == null || direction == 0) {
             return [];
         }
 
@@ -376,7 +407,7 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
             return [];
         }
 
-        var targetActor = mages[(startAOE + mages.Count - 1) % mages.Count];
+        var targetActor = mages[(startAOE + mages.Count - direction) % mages.Count];
         return new AOEInstance[1] { new(new AOEShapeCircle(18.0f), targetActor.Position) };
     }
 
@@ -388,8 +419,12 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
     }
 
     private void ClearStart() {
+        orb = null;
         start = null;
         startActorID = default;
+        previousAngle = default;
+        angularTravel = default;
+        direction = default;
     }
 
     private void ResetWave() {
@@ -400,8 +435,12 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
 
 sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(module) {
     private readonly List<Actor> mages = [];
+    private Actor? orb;
     private WPos? start;
     private ulong startActorID;
+    private float previousAngle;
+    private float angularTravel;
+    private int direction;
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
         if (spell.Action.ID == (uint)AID.SmallForOne) {
@@ -413,8 +452,18 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
         if (actor.OID == (uint)OID.TinyApprentice) {
             TinyMageMechanic.AddMage(mages, actor, Arena.Center);
         } else if (actor.OID == (uint)OID.HolySphere1Grow) {
+            orb = actor;
             start = actor.Position;
             startActorID = actor.InstanceID;
+            previousAngle = TinyMageMechanic.AngleFromNorth(actor.Position, Arena.Center);
+            angularTravel = default;
+            direction = default;
+        }
+    }
+
+    public override void Update() {
+        if (orb != null && direction == 0) {
+            direction = TinyMageMechanic.ObserveDirection(orb, Arena.Center, ref previousAngle, ref angularTravel);
         }
     }
 
@@ -433,7 +482,7 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
     }
 
     public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor) {
-        if (mages.Count != 4 || start == null) {
+        if (mages.Count != 4 || start == null || direction == 0) {
             return [];
         }
 
@@ -442,7 +491,7 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
             return [];
         }
 
-        var targetActor = mages[(startAOE + mages.Count - 1) % mages.Count];
+        var targetActor = mages[(startAOE + mages.Count - direction) % mages.Count];
         return new Knockback[1] { new(targetActor.Position, 15.0f) };
     }
 
@@ -454,8 +503,12 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
     }
 
     private void ClearStart() {
+        orb = null;
         start = null;
         startActorID = default;
+        previousAngle = default;
+        angularTravel = default;
+        direction = default;
     }
 
     private void ResetWave() {
@@ -481,23 +534,49 @@ static class OrbPairMechanic {
     }
 }
 
-sealed class FlareCombo(BossModule module) : Components.GenericAOEs(module) {
+// The four pair resolutions form one mixed flare/holy sequence. Track both types in one
+// timeline so a later holy does not become the active knockback while an earlier flare is
+// still pending (and vice versa).
+sealed class OrbPairTimeline(BossModule module) : BossComponent(module) {
     private const double ExpireDelay = 10.0d;
 
-    private sealed class PairAOE(OrbPairMechanic.Key key, AOEInstance aoe, float distance) {
-        public readonly OrbPairMechanic.Key Key = key;
-        public AOEInstance AOE = aoe;
-        public readonly float Distance = distance;
+    public enum Kind : byte {
+        Flare,
+        Holy
     }
 
-    private readonly List<PairAOE> aoes = [];
+    public sealed class Entry(OrbPairMechanic.Key key, Kind kind, WPos origin, float distance, DateTime activation) {
+        public readonly OrbPairMechanic.Key Key = key;
+        public readonly Kind Type = kind;
+        public readonly WPos Origin = origin;
+        public readonly float Distance = distance;
+        public DateTime Activation = activation;
+        public ulong ActorID;
+    }
+
+    private readonly List<Entry> entries = [];
     private readonly HashSet<OrbPairMechanic.Key> pairs = [];
+    private readonly HashSet<uint> seenGlobalSequences = [];
+
+    public List<Entry> Upcoming(int count) {
+        PruneExpired();
+        return entries
+            .OrderBy(entry => entry.Activation)
+            .ThenBy(entry => entry.Distance)
+            .ThenBy(entry => entry.Key.First)
+            .Take(count)
+            .ToList();
+    }
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
         if (spell.Action.ID == (uint)AID._Ability_AllForOne) {
             ResetWave();
-        } else if (spell.Action.ID == (uint)AID.TinyFlare1) {
-            UpdateActivation(caster, Module.CastFinishAt(spell));
+            return;
+        }
+
+        var kind = KindForAction(spell.Action.ID);
+        if (kind != null) {
+            UpdateActivation(kind.Value, caster, Module.CastFinishAt(spell));
         }
     }
 
@@ -507,7 +586,12 @@ sealed class FlareCombo(BossModule module) : Components.GenericAOEs(module) {
         }
 
         var target = WorldState.Actors.Find(tether.Target);
-        if (target == null || (source.OID != (uint)OID.FlareSphere && target.OID != (uint)OID.FlareSphere)) {
+        if (target == null) {
+            return;
+        }
+
+        var kind = KindForPair(source, target);
+        if (kind == null) {
             return;
         }
 
@@ -516,202 +600,120 @@ sealed class FlareCombo(BossModule module) : Components.GenericAOEs(module) {
             return;
         }
 
-        var midPoint = WPos.Lerp(source.Position, target.Position, 0.5f);
         var distance = (target.Position - source.Position).Length();
-        var activation = OrbPairMechanic.EstimateActivation(WorldState, distance);
-        aoes.Add(new(key, new(new AOEShapeCircle(18.0f), midPoint, activation: activation), distance));
+        entries.Add(new(key, kind.Value, WPos.Lerp(source.Position, target.Position, 0.5f), distance, OrbPairMechanic.EstimateActivation(WorldState, distance)));
     }
 
-    public override void OnActorDeath(Actor actor) {
-        RemoveActor(actor.InstanceID);
-    }
-
-    public override void OnActorDestroyed(Actor actor) {
-        RemoveActor(actor.InstanceID);
-    }
+    public override void OnActorDeath(Actor actor) => RemoveActor(actor.InstanceID);
+    public override void OnActorDestroyed(Actor actor) => RemoveActor(actor.InstanceID);
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell) {
-        if (spell.Action.ID is (uint)AID.TinyFlare1 or (uint)AID.TinyHoly1) {
-            RemoveAt(caster);
-        }
-    }
-
-    public override void Update() {
-        PruneExpired();
-    }
-
-    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) {
-        PruneExpired();
-        if (aoes.Count == 0) {
-            return [];
+        var kind = KindForAction(spell.Action.ID);
+        if (kind == null || spell.GlobalSequence != 0 && !seenGlobalSequences.Add(spell.GlobalSequence)) {
+            return;
         }
 
-        int show = 0;
-        var upcomingAOEs = aoes.OrderBy(entry => entry.Distance).ThenBy(entry => entry.Key.First).Select(entry => entry.AOE).Take(2).ToList();
-        foreach (ref var aoe in CollectionsMarshal.AsSpan(upcomingAOEs)) {
-            aoe.Color = show == 0 ? Colors.Danger : Colors.AOE;
-            aoe.Risky = show == 0;
-            show++;
-        }
-
-        return CollectionsMarshal.AsSpan(upcomingAOEs);
+        RemoveAt(kind.Value, caster);
     }
 
-    private void UpdateActivation(Actor caster, DateTime activation) {
-        foreach (var entry in aoes) {
-            if (entry.AOE.Origin.AlmostEqual(caster.Position, 1.5f)) {
-                entry.AOE.Activation = activation;
-                entry.AOE.ActorID = caster.InstanceID;
+    public override void Update() => PruneExpired();
+
+    private static Kind? KindForAction(uint actionID) => actionID switch {
+        (uint)AID.TinyFlare1 => Kind.Flare,
+        (uint)AID.TinyHoly1 => Kind.Holy,
+        _ => null
+    };
+
+    private static Kind? KindForPair(Actor first, Actor second) {
+        if (first.OID == (uint)OID.FlareSphere && second.OID == (uint)OID.FlareSphere) {
+            return Kind.Flare;
+        }
+        if (first.OID == (uint)OID.HolySphere && second.OID == (uint)OID.HolySphere) {
+            return Kind.Holy;
+        }
+        return null;
+    }
+
+    private void UpdateActivation(Kind kind, Actor caster, DateTime activation) {
+        foreach (var entry in entries) {
+            if (entry.Type == kind && entry.Origin.AlmostEqual(caster.Position, 1.5f)) {
+                entry.Activation = activation;
+                entry.ActorID = caster.InstanceID;
             }
         }
     }
 
-    private void RemoveAt(Actor caster) {
-        for (var i = aoes.Count - 1; i >= 0; --i) {
-            var aoe = aoes[i].AOE;
-            if (aoe.ActorID == caster.InstanceID || aoe.Origin.AlmostEqual(caster.Position, 1.5f)) {
-                pairs.Remove(aoes[i].Key);
-                aoes.RemoveAt(i);
+    private void RemoveAt(Kind kind, Actor caster) {
+        for (var i = entries.Count - 1; i >= 0; --i) {
+            var entry = entries[i];
+            if (entry.Type == kind && (entry.ActorID == caster.InstanceID || entry.Origin.AlmostEqual(caster.Position, 1.5f))) {
+                pairs.Remove(entry.Key);
+                entries.RemoveAt(i);
             }
         }
     }
 
     private void RemoveActor(ulong instanceID) {
-        for (var i = aoes.Count - 1; i >= 0; --i) {
-            var key = aoes[i].Key;
+        for (var i = entries.Count - 1; i >= 0; --i) {
+            var key = entries[i].Key;
             if (key.First == instanceID || key.Second == instanceID) {
                 pairs.Remove(key);
-                aoes.RemoveAt(i);
+                entries.RemoveAt(i);
             }
         }
     }
 
     private void ResetWave() {
-        aoes.Clear();
+        entries.Clear();
         pairs.Clear();
+        seenGlobalSequences.Clear();
     }
 
     private void PruneExpired() {
         var now = WorldState.CurrentTime;
-        for (var i = aoes.Count - 1; i >= 0; --i) {
-            if (now > aoes[i].AOE.Activation.AddSeconds(ExpireDelay)) {
-                pairs.Remove(aoes[i].Key);
-                aoes.RemoveAt(i);
+        for (var i = entries.Count - 1; i >= 0; --i) {
+            if (now > entries[i].Activation.AddSeconds(ExpireDelay)) {
+                pairs.Remove(entries[i].Key);
+                entries.RemoveAt(i);
             }
         }
     }
 }
 
-sealed class HolyCombo(BossModule module) : Components.GenericKnockback(module) {
-    private const double ExpireDelay = 10.0d;
+sealed class FlareCombo(BossModule module) : Components.GenericAOEs(module) {
+    private static readonly AOEShapeCircle Shape = new(18.0f);
+    private readonly OrbPairTimeline timeline = module.FindComponent<OrbPairTimeline>()!;
+    private readonly List<AOEInstance> displayed = [with(2)];
 
-    private sealed class PairKnockback(OrbPairMechanic.Key key, Knockback knockback, float distance) {
-        public readonly OrbPairMechanic.Key Key = key;
-        public Knockback Knockback = knockback;
-        public readonly float Distance = distance;
-    }
-
-    private readonly List<PairKnockback> knockbacks = [];
-    private readonly HashSet<OrbPairMechanic.Key> pairs = [];
-
-    public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
-        if (spell.Action.ID == (uint)AID._Ability_AllForOne) {
-            ResetWave();
-        } else if (spell.Action.ID == (uint)AID.TinyHoly1) {
-            UpdateActivation(caster, Module.CastFinishAt(spell));
-        }
-    }
-
-    public override void OnTethered(Actor source, in ActorTetherInfo tether) {
-        if (tether.ID != (uint)TetherID.OrbPairs) {
-            return;
-        }
-
-        var target = WorldState.Actors.Find(tether.Target);
-        if (target == null || (source.OID != (uint)OID.HolySphere && target.OID != (uint)OID.HolySphere)) {
-            return;
-        }
-
-        var key = OrbPairMechanic.MakeKey(source.InstanceID, target.InstanceID);
-        if (!pairs.Add(key)) {
-            return;
-        }
-
-        var midPoint = WPos.Lerp(source.Position, target.Position, 0.5f);
-        var distance = (target.Position - source.Position).Length();
-        var activation = OrbPairMechanic.EstimateActivation(WorldState, distance);
-        knockbacks.Add(new(key, new(midPoint, 15.0f, activation), distance));
-    }
-
-    public override void OnActorDeath(Actor actor) {
-        RemoveActor(actor.InstanceID);
-    }
-
-    public override void OnActorDestroyed(Actor actor) {
-        RemoveActor(actor.InstanceID);
-    }
-
-    public override void OnEventCast(Actor caster, ActorCastEvent spell) {
-        if (spell.Action.ID is (uint)AID.TinyFlare1 or (uint)AID.TinyHoly1) {
-            RemoveAt(caster);
-        }
-    }
-
-    public override void Update() {
-        PruneExpired();
-    }
-
-    public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor) {
-        PruneExpired();
-        if (knockbacks.Count == 0) {
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) {
+        displayed.Clear();
+        var upcoming = timeline.Upcoming(2);
+        if (upcoming.Count == 0) {
             return [];
         }
 
-        var knockbackIncoming = knockbacks.OrderBy(entry => entry.Distance).ThenBy(entry => entry.Key.First).First();
-        return new Knockback[1] { knockbackIncoming.Knockback };
-    }
-
-    private void UpdateActivation(Actor caster, DateTime activation) {
-        foreach (var entry in knockbacks) {
-            if (entry.Knockback.Origin.AlmostEqual(caster.Position, 1.5f)) {
-                entry.Knockback = new(entry.Knockback.Origin, entry.Knockback.Distance, activation, actorID: caster.InstanceID);
+        var imminentDeadline = upcoming[0].Activation.AddSeconds(0.2d);
+        foreach (var entry in upcoming) {
+            if (entry.Type == OrbPairTimeline.Kind.Flare) {
+                var imminent = entry.Activation <= imminentDeadline;
+                displayed.Add(new(Shape, entry.Origin, activation: entry.Activation, color: imminent ? Colors.Danger : Colors.AOE, risky: imminent, actorID: entry.ActorID));
             }
         }
+        return CollectionsMarshal.AsSpan(displayed);
     }
+}
 
-    private void RemoveAt(Actor caster) {
-        for (var i = knockbacks.Count - 1; i >= 0; --i) {
-            var knockback = knockbacks[i].Knockback;
-            if (knockback.ActorID == caster.InstanceID || knockback.Origin.AlmostEqual(caster.Position, 1.5f)) {
-                pairs.Remove(knockbacks[i].Key);
-                knockbacks.RemoveAt(i);
-            }
+sealed class HolyCombo(BossModule module) : Components.GenericKnockback(module) {
+    private readonly OrbPairTimeline timeline = module.FindComponent<OrbPairTimeline>()!;
+
+    public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor) {
+        var upcoming = timeline.Upcoming(1);
+        if (upcoming.Count == 0 || upcoming[0].Type != OrbPairTimeline.Kind.Holy) {
+            return [];
         }
-    }
 
-    private void RemoveActor(ulong instanceID) {
-        for (var i = knockbacks.Count - 1; i >= 0; --i) {
-            var key = knockbacks[i].Key;
-            if (key.First == instanceID || key.Second == instanceID) {
-                pairs.Remove(key);
-                knockbacks.RemoveAt(i);
-            }
-        }
-    }
-
-    private void ResetWave() {
-        knockbacks.Clear();
-        pairs.Clear();
-    }
-
-    private void PruneExpired() {
-        var now = WorldState.CurrentTime;
-        for (var i = knockbacks.Count - 1; i >= 0; --i) {
-            if (now > knockbacks[i].Knockback.Activation.AddSeconds(ExpireDelay)) {
-                pairs.Remove(knockbacks[i].Key);
-                knockbacks.RemoveAt(i);
-            }
-        }
+        var next = upcoming[0];
+        return new Knockback[1] { new(next.Origin, 15.0f, next.Activation, actorID: next.ActorID) };
     }
 }
 
@@ -726,6 +728,7 @@ sealed class TinyMageStates : StateMachineBuilder {
             .ActivateOnEnter<Comet>()
             .ActivateOnEnter<HolyGrowable>()
             .ActivateOnEnter<FlareGrowable>()
+            .ActivateOnEnter<OrbPairTimeline>()
             .ActivateOnEnter<FlareCombo>()
             .ActivateOnEnter<HolyCombo>();
     }
