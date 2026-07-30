@@ -9,10 +9,12 @@ BossMod Reborn CN 是由 KanoNoUta 维护的国服适配版本，当前对应国
 
 ## 国服 7.55 新月岛北岛
 
-- 已适配录像覆盖的 CE51、CE54、CE56、CE58、CE59、CE60、CE61、CE62。
+- 已适配现有录像覆盖的 CE50–CE63（CE49 提蔛暂无录像，按当前范围暂缓）。
+- 新增古术魔典、卡洛菲斯提莉二重身、赤龙与新月阿剌克涅的完整机制模块。
 - 已处理高倍速回放重复包、CastInfo 重同步、迟到事件与残留范围清理。
-- 惨白魔人的指令电网直接跟随真实 helper 坐标与朝向，兼容逆转极性后的顺序变化。
-- 连续半场按实际先后显示；拉拽、圆形击退与横向击退使用客户端 ActionEffect 参数。
+- 惨白魔人的死亡轮盘按实测 5–12m/12–20m 极坐标扇区绘制，并跟随 helper 的实时坐标、朝向与极性换位。
+- 阿尔戈尔旋转拉拽、连续半场、圆形击退与横向击退均按 replay/客户端 ActionEffect 的实际时序处理。
+- 补全统领奇美拉三连吐息、玛琦塔八连挥击与唤雷者 Freefall 三段落点。
 
 第三方插件库：`https://raw.githubusercontent.com/KanoNoUta/DalamudPlugins/main/pluginmaster.json`
 
