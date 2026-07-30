@@ -191,7 +191,7 @@ sealed class Comet(BossModule module) : BossComponent(module) {
 
         foreach (var comet in comets.Values) {
             if (comet.Tethers == maxTethers) {
-                Arena.AddCircle(comet.Actor.Position, 2.0f, Colors.Safe, 2.0f);
+                Arena.ZoneCircleOutline(comet.Actor.Position, 2.0f, Colors.Safe, 2.0f);
             }
         }
     }
