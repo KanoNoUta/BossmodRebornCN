@@ -14,6 +14,7 @@ BossMod Reborn CN 是由 KanoNoUta 维护的国服适配版本，当前对应国
 - 已处理高倍速回放重复包、CastInfo 重同步、迟到事件与残留范围清理。
 - 惨白魔人的死亡轮盘按实测 5–12m/12–20m 极坐标扇区绘制，并跟随 helper 的实时坐标、朝向与极性换位。
 - 阿尔戈尔旋转拉拽、连续半场、圆形击退与横向击退均按 replay/客户端 ActionEffect 的实际时序处理。
+- 7.5.5.8 修正雪石膏之剑与宝石兽半场方向、卡洛菲斯提莉左右刀、魔亡灵法师直条和古术魔典圆形场地，并补强阿尔戈尔旋转吸引 AI 与诱拐魔冰花提示。
 - 补全统领奇美拉三连吐息、玛琦塔八连挥击与唤雷者 Freefall 三段落点。
 
 第三方插件库：`https://raw.githubusercontent.com/KanoNoUta/DalamudPlugins/main/pluginmaster.json`

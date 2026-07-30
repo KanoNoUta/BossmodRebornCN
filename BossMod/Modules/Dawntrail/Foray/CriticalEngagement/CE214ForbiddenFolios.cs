@@ -386,7 +386,11 @@ sealed class ForbiddenFoliosStates : StateMachineBuilder
     GroupID = 1093u,
     NameID = 52u,
     SortOrder = 13)]
-public sealed class ForbiddenFolios(WorldState ws, Actor primary) : BossModule(ws, primary, new(659f, 659f), new ArenaBoundsSquare(25f))
+// Replay-verified circular arena: 14k+ player position samples cluster inside r20 with zero
+// occupancy in square corners, and book traps/mechanics stop at r~20. The Horizontal Rule lanes
+// are projected from outside (r26-36), which previously misled the bounds into a 25y square -
+// that made automation run for corner "safe spots" that are actually out of bounds.
+public sealed class ForbiddenFolios(WorldState ws, Actor primary) : BossModule(ws, primary, new(659f, 659f), new ArenaBoundsCircle(20f))
 {
     protected override void DrawEnemies(int pcSlot, Actor pc)
     {

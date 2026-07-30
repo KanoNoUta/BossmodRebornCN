@@ -80,12 +80,20 @@ sealed class AlgolAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 // The normal cone resolves at the end of its cast. Spinning Inhale then emits 15-degree ticks for
 // roughly five seconds after the visual cast; predict the next tick instead of dropping the hint at
 // cast finish. BBE7/C6FE only pull vegetables and must not drive player movement hints.
+// GenericKnockback does not feed the AI any forbidden zones by itself, so AddAIHints is overridden
+// here: players pulled by either cone are subsequently devoured, so the safe play is simply to
+// never stand in the cone. For the spinning version the sweep advances -15 degrees every 0.2s
+// (replay-verified, one full turn), so the AI is kept out of the next few predicted sectors and
+// naturally trails behind the sweep.
 sealed class AlgolDrawIn(BossModule module) : Components.GenericKnockback(module)
 {
     private const float PullDistance = 12f;
     private const double SpinTickInterval = 0.2d;
+    private static readonly Angle DefaultSpinStep = -15f.Degrees();
     private static readonly AOEShapeCone LongCone = new(60f, 15f.Degrees());
     private static readonly AOEShapeCone ShortCone = new(30f, 15f.Degrees());
+    // slightly wider than the drawn cones so the AI keeps a margin from the sweep edge
+    private static readonly AOEShapeCone HintCone = new(30f, 22.5f.Degrees());
     private readonly List<Knockback> _active = [with(2)];
     private Knockback? _normal;
     private Knockback? _spinning;
@@ -108,6 +116,39 @@ sealed class AlgolDrawIn(BossModule module) : Components.GenericKnockback(module
     }
 
     public override void Update() => PruneExpired();
+
+    // GenericKnockback only draws the pull arrow for the own player; the cones themselves would be
+    // invisible on the arena. Draw the active cone (danger) and, for the spinning version, outline
+    // the predicted next sector so the sweep direction is readable.
+    public override void DrawArenaBackground(int pcSlot, Actor pc)
+    {
+        if (_normal is { } normal)
+            LongCone.Draw(Arena, normal.Origin, normal.Direction);
+        if (_spinning is { } spinning)
+        {
+            var step = _spinStep == default ? DefaultSpinStep : _spinStep;
+            ShortCone.Draw(Arena, spinning.Origin, spinning.Direction);
+            ShortCone.Outline(Arena, spinning.Origin, spinning.Direction + step);
+        }
+    }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        if (_normal is { } normal)
+            hints.AddForbiddenZone(LongCone, normal.Origin, normal.Direction, normal.Activation);
+        if (_spinning is { } spinning)
+        {
+            var step = _spinStep == default ? DefaultSpinStep : _spinStep;
+            var direction = spinning.Direction;
+            var activation = spinning.Activation;
+            for (var i = 0; i < 3; ++i)
+            {
+                hints.AddForbiddenZone(HintCone, spinning.Origin, direction, activation);
+                direction += step;
+                activation = activation.AddSeconds(SpinTickInterval);
+            }
+        }
+    }
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {

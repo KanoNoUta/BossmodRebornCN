@@ -56,10 +56,12 @@ sealed class AlabasterSlashes(BossModule module) : ReplayValidatedOppositeAOEs(m
 
     protected override SequenceConfig? ConfigFor(uint firstActionID) => firstActionID switch
     {
-        // The cast rotation is the boss facing; the first slash is centered on the named side.
-        // Replay events confirm B83E -> B841 and B83F -> B840 for the follow-up hit.
-        (uint)AID.RightLeftSlash => new(Half, Half, (uint)AID.SweepLeft, 1.7d, 90f.Degrees()),
-        (uint)AID.LeftRightSlash => new(Half, Half, (uint)AID.SweepRight, 1.7d, -90f.Degrees()),
+        // Replay-verified: the cast packet rotation already points at the first slash's half (e.g.
+        // boss facing 180 casts B83E with rotation 90 = its right side; hits land within +-90 deg
+        // of the cast rotation, and the follow-up sweep lands on the opposite half). Adding a side
+        // offset on top would rotate the pair into a front/back cleave, which is wrong.
+        (uint)AID.RightLeftSlash => new(Half, Half, (uint)AID.SweepLeft, 1.7d),
+        (uint)AID.LeftRightSlash => new(Half, Half, (uint)AID.SweepRight, 1.7d),
         _ => null
     };
 }

@@ -59,8 +59,10 @@ sealed class ClawTailCombo(BossModule module) : ReplayValidatedOppositeAOEs(modu
     protected override SequenceConfig? ConfigFor(uint firstActionID) => firstActionID switch
     {
         (uint)AID.ClawThenTail => new(Claw, Tail, (uint)AID.ClawThenTailSecond, 2d),
-        // Tail resolves behind the boss first, then claw resolves in front.
-        (uint)AID.TailThenClaw => new(Tail, Claw, (uint)AID.TailThenClawSecond, 2d, 180f.Degrees()),
+        // Replay-verified: even though the boss visually spins around before the first hit lands,
+        // both first hits resolve centered on the cast-start rotation (hits within +-90 deg of it)
+        // and both second hits resolve on the opposite half. No rotation offset for either combo.
+        (uint)AID.TailThenClaw => new(Tail, Claw, (uint)AID.TailThenClawSecond, 2d),
         _ => null
     };
 }

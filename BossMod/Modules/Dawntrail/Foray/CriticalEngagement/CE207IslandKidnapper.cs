@@ -7,6 +7,7 @@ public enum OID : uint
 {
     Boss = 0x4BE1, // R3.2, BNpcName 14505, kidnapper
     Hurricane = 0x4BE2,
+    Emitter = 0x4BE3, // wind spirit, spawns on the R16 ring facing center, casts the B953 ice-flower circles
     Anchor = 0x4BE4, // non-targetable arena controller at center
     Helper = 0x233C
 }
@@ -23,6 +24,7 @@ public enum AID : uint
     GustHit = 0xB950, // raidwide damage and 24y forward knockback
     GaleBlade = 0xB951, // 60y 180-degree cone
     ScatterFeathers = 0xB952,
+    WindBloom = 0xB953, // emitter self-centered 13y circle; four-six of them ring the arena and rotate wave to wave into a moving "ice flower", safe pocket near dead center
     DispersingGalesVisual = 0xB954,
     DispersingGales = 0xB955, // 60y 60-degree cone
     DownburstVisual = 0xB956,
@@ -47,6 +49,7 @@ sealed class KidnapperAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
     private static readonly AOEShapeCone Cone = new(60f, 30f.Degrees());
     private static readonly AOEShapeRect Rending = new(60f, 4f);
     private static readonly AOEShapeCircle Downburst = new(15f);
+    private static readonly AOEShapeCircle Bloom = new(13f);
     private static readonly AOEShapeDonut Ring = new(10f, 60f);
 
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
@@ -54,6 +57,7 @@ sealed class KidnapperAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
         (uint)AID.GaleBlade => new(Half),
         (uint)AID.DispersingGales => new(Cone),
         (uint)AID.RendingWind => new(Rending),
+        (uint)AID.WindBloom => new(Bloom),
         (uint)AID.Downburst => new(Downburst, true),
         (uint)AID.CycloneRing => new(Ring),
         _ => null

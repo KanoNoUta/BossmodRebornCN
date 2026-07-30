@@ -46,8 +46,8 @@ public enum AID : uint
     DashingCutLong = 0xBF9C, // helper->location, 6.5s cast, dynamic-length 10y wide charge
     DashingCutShort = 0xBF9D, // helper->location, 1.0s cast, dynamic-length 10y wide charge
     AutoAttack = 0xC3CA, // boss->player, no cast, single-target
-    DualCutFirst = 0xC603, // helper->self, 2.8s cast, 60y 120-degree cone
-    DualCutSecond = 0xC604 // helper->self, 4.8s cast, 60y 120-degree cone
+    DualCutFirst = 0xC603, // helper->self, 2.8s cast, 60y 180-degree cone (no telegraph decal, omen=0)
+    DualCutSecond = 0xC604 // helper->self, 4.8s cast, 60y 180-degree cone opposite the first (no telegraph decal, omen=0)
 }
 
 // Every stationary avoidable AOE has an authoritative cast packet from the actor that owns its
@@ -55,17 +55,32 @@ public enum AID : uint
 // cancels its long cast without an action effect.
 sealed class CalofisteriAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 {
-    private static readonly AOEShapeCone DualCut = new(60f, 60f.Degrees());
     private static readonly AOEShapeCircle SixYalms = new(6f);
     private static readonly AOEShapeCircle HairShearsCircle = new(10f);
     private static readonly AOEShapeRect HairShearsLine = new(60f, 2f);
 
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
-        (uint)AID.DualCutFirst or (uint)AID.DualCutSecond => new(DualCut),
         (uint)AID.Graft or (uint)AID.MaliciousWeaveLong or (uint)AID.MaliciousWeaveShort or (uint)AID.Garrote => new(SixYalms),
         (uint)AID.HairShearsCircle => new(HairShearsCircle),
         (uint)AID.HairShearsLine => new(HairShearsLine),
+        _ => null
+    };
+}
+
+// Two helpers cast C603 (2.8s) and C604 (4.8s) simultaneously from the same spot with opposite
+// rotations; replay hits reach +-90 degrees of each cast rotation, so each cut is a 180-degree
+// half-arena cleave. Drawing both as risky would forbid the entire arena and freeze the AI, so
+// only the earliest unresolved cut is risky - dodge into the second half after the first resolves.
+sealed class DualCuts(BossModule module) : ReplayValidatedCastAOEs(module)
+{
+    private static readonly AOEShapeCone DualCut = new(60f, 90f.Degrees());
+
+    protected override int MaxRisky => 1;
+
+    protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
+    {
+        (uint)AID.DualCutFirst or (uint)AID.DualCutSecond => new(DualCut),
         _ => null
     };
 }
@@ -248,6 +263,7 @@ sealed class DoubledTroubleStates : StateMachineBuilder
     {
         TrivialPhase()
             .ActivateOnEnter<CalofisteriAOEs>()
+            .ActivateOnEnter<DualCuts>()
             .ActivateOnEnter<DashingCuts>()
             .ActivateOnEnter<MaliciousWeavePulls>()
             .ActivateOnEnter<HairShearsPulls>()

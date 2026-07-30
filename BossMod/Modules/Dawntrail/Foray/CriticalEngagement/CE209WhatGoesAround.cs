@@ -20,7 +20,7 @@ public enum AID : uint
     MarchOfTheDead = 0xB849, // boss->self, 3.0s cast, visual
     GrudgeRelease = 0xB84A, // spirit->self, 5.0s cast, range 50 width 5 rect
     DeployMagicCircle = 0xB84B, // boss->self, 3.0s cast, visual
-    GloomCurrent = 0xB84C, // helper->self, 7.0s cast, range 70 width 12 rect
+    GloomCurrent = 0xB84C, // helper->self, 7.0s cast, range 70 width 12 rect, lane centered on the helper
     Gloom = 0xB84D, // boss->self, 5.0s cast, range 50 width 50 rect
     DarkIV = 0xB84E, // boss->self, 5.0s cast, raidwide visual
     DarkIVHit = 0xB84F, // helpers->players, raidwide damage
@@ -35,7 +35,11 @@ sealed class WhatGoesAroundAOEs(BossModule module) : ReplayValidatedCastAOEs(mod
     private static readonly AOEShapeCircle SpiritCircle = new(8f);
     private static readonly AOEShapeCross SpiritCross = new(80f, 3.5f);
     private static readonly AOEShapeRect Grudge = new(50f, 2.5f);
-    private static readonly AOEShapeRect Current = new(70f, 6f);
+    // Replay hits land up to ~26y on both sides of the casting helper (projections -16.2..+25.6 on
+    // the lane axis, lateral offsets within 6y), and the packet rotation points opposite to the
+    // visual flow. Draw each lane as a symmetric line through the helper so all three lanes of a
+    // wave cover the arena correctly regardless of the packet rotation sign.
+    private static readonly AOEShapeRect Current = new(35f, 6f, 35f);
     private static readonly AOEShapeRect Gloom = new(50f, 25f);
 
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
