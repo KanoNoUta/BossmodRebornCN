@@ -9,6 +9,7 @@ public enum OID : uint
 
 public enum AID : uint
 {
+    AutoAttack = 50851, // boss->player, no cast, single-target
     HyperconductivePlasma = 47528, // Boss->self, 5.0s cast, raidwide
     BatteringArms = 47529, // Boss->self, 6.0s cast, tankbuster visual
 

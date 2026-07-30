@@ -1,0 +1,278 @@
+using BossMod.Dawntrail.Foray.CriticalEngagement;
+using static BossMod.Components.GenericKnockback;
+
+namespace BossMod.Dawntrail.Foray.CriticalEngagement.CE211DoubledTrouble;
+
+public enum OID : uint
+{
+    Boss = 0x4BB8, // R5.5, BNpcName 14517, Calofisteri Doppelganger
+    HairBinding = 0x4BB9, // R4.44, BNpcName 14518, targetable Garrote/Malicious Weave add
+    Hair = 0x4BBA, // R1.0, BNpcName 14519, short-lived Graft add
+    DashingCutWaypoint = 0x4BBB, // R1.0, BNpcName 108, non-targetable route marker
+    DashingCutTarget = 0x4BBC, // R1.0, BNpcName 108, non-targetable first-destination marker
+    Helper = 0x233C
+}
+
+public enum AID : uint
+{
+    AsymmetricCoifChange1 = 0xB7CE, // boss->self, 3.0s cast, selects a Dual Cut pattern
+    AsymmetricCoifChange2 = 0xB7CF, // boss->self, 3.0s cast, selects a Dual Cut pattern
+    CoifChange1 = 0xB7D0, // boss->self, no cast, visual
+    CoifChange2 = 0xB7D1, // boss->self, no cast, visual
+    DualCutVisual1 = 0xB7D2, // boss->self, 2.0s cast, visual for C603/C604
+    DualCutVisual2 = 0xB7D3, // boss->self, 2.0s cast, visual for C603/C604
+    DualCutAnimation1 = 0xB7D4, // boss->self, no cast, visual
+    DualCutAnimation2 = 0xB7D5, // boss->self, no cast, visual
+    ResettingSpray1 = 0xB7D6, // boss->self, no cast, visual
+    ResettingSpray2 = 0xB7D7, // boss->self, no cast, visual
+    ResettingSpray3 = 0xB7D8, // boss->self, no cast, visual
+    ResettingSpray4 = 0xB7D9, // boss->self, no cast, visual
+    DashingCutMarker = 0xB7DA, // DashingCutTarget->self, no cast, route-selection event
+    DashingCutVisualLong = 0xB7DB, // boss->location, 6.0s cast, visual for BF9C
+    DashingCutVisualShort = 0xB7DC, // boss->location, 0.5s cast, visual for BF9D
+    Extension = 0xB7DD, // boss->self, 3.0s cast, spawns Hair/HairBinding adds
+    Graft = 0xB7DE, // Hair->self, 3.0s cast, 6y circle
+    BalefulBlowout = 0xB7DF, // boss->self, 5.0s cast, visual for Malicious Weave
+    MaliciousWeaveLong = 0xB7E0, // HairBinding->self, 5.5s cast, 6y circle and draw-in
+    Garrote = 0xB7E1, // HairBinding->self, 10.0s cast, 6y circle; cancelled when add dies
+    GarroteCancel = 0xB7E2, // HairBinding->self, no cast, cancellation/death event
+    HairShearsVisual = 0xB7E3, // boss->self, 5.0s cast, visual
+    HairShearsCircle = 0xB7E4, // helper->self, 5.0s cast, 10y circle
+    HairShearsLine = 0xB7E5, // helper->self, 5.0s cast, 60y long 4y wide rect
+    MaliciousWeaveShort = 0xB7E6, // HairBinding->self, 1.0s cast, 6y circle and draw-in
+    AuraBurstVisual = 0xB7E7, // boss->self, 5.0s cast, raidwide visual
+    AuraBurst = 0xB7E8, // three helpers, no cast, raidwide damage
+    HairShearsPull = 0xB9EF, // helpers, no cast, delayed draw-in for players hit by B7E5
+    DashingCutLong = 0xBF9C, // helper->location, 6.5s cast, dynamic-length 10y wide charge
+    DashingCutShort = 0xBF9D, // helper->location, 1.0s cast, dynamic-length 10y wide charge
+    AutoAttack = 0xC3CA, // boss->player, no cast, single-target
+    DualCutFirst = 0xC603, // helper->self, 2.8s cast, 60y 120-degree cone
+    DualCutSecond = 0xC604 // helper->self, 4.8s cast, 60y 120-degree cone
+}
+
+// Every stationary avoidable AOE has an authoritative cast packet from the actor that owns its
+// origin and rotation. Actor death/destruction cleanup is important for Garrote: killing a binding
+// cancels its long cast without an action effect.
+sealed class CalofisteriAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
+{
+    private static readonly AOEShapeCone DualCut = new(60f, 60f.Degrees());
+    private static readonly AOEShapeCircle SixYalms = new(6f);
+    private static readonly AOEShapeCircle HairShearsCircle = new(10f);
+    private static readonly AOEShapeRect HairShearsLine = new(60f, 2f);
+
+    protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
+    {
+        (uint)AID.DualCutFirst or (uint)AID.DualCutSecond => new(DualCut),
+        (uint)AID.Graft or (uint)AID.MaliciousWeaveLong or (uint)AID.MaliciousWeaveShort or (uint)AID.Garrote => new(SixYalms),
+        (uint)AID.HairShearsCircle => new(HairShearsCircle),
+        (uint)AID.HairShearsLine => new(HairShearsLine),
+        _ => null
+    };
+}
+
+// The BF9C/BF9D cast rotation is a fixed packet value and does not point along the charge. Build
+// each rectangle from the helper's live position to spell.LocXZ instead. The small resolved-cast
+// tombstone prevents an accelerated replay's stale cast-start packet from resurrecting a charge.
+sealed class DashingCuts(BossModule module) : Components.GenericAOEs(module)
+{
+    private const double EventResolveTolerance = 0.5d;
+    private const double TombstoneWindow = 1d;
+    private const double ExpireDelay = 2d;
+
+    private readonly record struct PendingCharge(uint ActionID, AOEInstance AOE);
+    private readonly record struct ResolvedCharge(uint ActionID, ulong ActorID, DateTime Activation, DateTime ExpiresAt);
+
+    private readonly List<PendingCharge> _pending = [with(4)];
+    private readonly List<AOEInstance> _displayed = [with(4)];
+    private readonly List<ResolvedCharge> _resolved = [with(4)];
+    private readonly HashSet<uint> _seenGlobalSequences = [];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
+    {
+        PruneExpired();
+        _displayed.Clear();
+        foreach (var pending in _pending)
+            _displayed.Add(pending.AOE);
+        return CollectionsMarshal.AsSpan(_displayed);
+    }
+
+    public override void Update() => PruneExpired();
+
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
+    {
+        if (!IsWatched(spell.Action.ID))
+            return;
+
+        PruneExpired();
+        var activation = Module.CastFinishAt(spell);
+        if (spell.EventHappened || activation <= WorldState.CurrentTime || WasRecentlyResolved(spell.Action.ID, caster.InstanceID, activation))
+            return;
+
+        var direction = spell.LocXZ - caster.Position;
+        var length = direction.Length();
+        if (length <= 0.1f)
+            return;
+
+        RemoveAll(spell.Action.ID, caster.InstanceID);
+        var rotation = Angle.FromDirection(direction);
+        var shape = new AOEShapeRect(length, 5f);
+        _pending.Add(new(spell.Action.ID, new(shape, caster.Position, rotation, activation, actorID: caster.InstanceID, shapeDistance: shape.Distance(caster.Position, rotation))));
+        _pending.Sort((left, right) => left.AOE.Activation.CompareTo(right.AOE.Activation));
+    }
+
+    public override void OnCastFinished(Actor caster, ActorCastInfo spell)
+    {
+        if (!IsWatched(spell.Action.ID))
+            return;
+
+        var now = WorldState.CurrentTime;
+        var activation = Module.CastFinishAt(spell);
+        RemoveAll(spell.Action.ID, caster.InstanceID);
+        if (spell.EventHappened || activation <= now.AddSeconds(EventResolveTolerance))
+            RememberResolved(spell.Action.ID, caster.InstanceID, activation, now);
+    }
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
+    {
+        if (!IsWatched(spell.Action.ID) || spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence))
+            return;
+
+        var now = WorldState.CurrentTime;
+        ++NumCasts;
+        var activation = RemoveResolvedByEvent(spell.Action.ID, caster.InstanceID, now) ?? now;
+        RememberResolved(spell.Action.ID, caster.InstanceID, activation, now);
+    }
+
+    public override void OnActorDeath(Actor actor) => RemoveActor(actor.InstanceID);
+    public override void OnActorDestroyed(Actor actor) => RemoveActor(actor.InstanceID);
+
+    private static bool IsWatched(uint actionID) => actionID is (uint)AID.DashingCutLong or (uint)AID.DashingCutShort;
+
+    private DateTime? RemoveResolvedByEvent(uint actionID, ulong actorID, DateTime now)
+    {
+        DateTime? activation = null;
+        for (var i = _pending.Count - 1; i >= 0; --i)
+        {
+            var pending = _pending[i];
+            if (pending.ActionID == actionID && pending.AOE.ActorID == actorID && pending.AOE.Activation <= now.AddSeconds(EventResolveTolerance))
+            {
+                activation = activation == null || pending.AOE.Activation < activation ? pending.AOE.Activation : activation;
+                _pending.RemoveAt(i);
+            }
+        }
+        return activation;
+    }
+
+    private bool WasRecentlyResolved(uint actionID, ulong actorID, DateTime activation)
+        => _resolved.Any(resolved => resolved.ActionID == actionID && resolved.ActorID == actorID && Math.Abs((resolved.Activation - activation).TotalSeconds) <= TombstoneWindow);
+
+    private void RememberResolved(uint actionID, ulong actorID, DateTime activation, DateTime now)
+    {
+        _resolved.RemoveAll(resolved => resolved.ActionID == actionID && resolved.ActorID == actorID);
+        _resolved.Add(new(actionID, actorID, activation, now.AddSeconds(TombstoneWindow)));
+    }
+
+    private void PruneExpired()
+    {
+        var now = WorldState.CurrentTime;
+        _pending.RemoveAll(pending => now > pending.AOE.Activation.AddSeconds(ExpireDelay));
+        _resolved.RemoveAll(resolved => now > resolved.ExpiresAt);
+    }
+
+    private void RemoveAll(uint actionID, ulong actorID) => _pending.RemoveAll(pending => pending.ActionID == actionID && pending.AOE.ActorID == actorID);
+
+    private void RemoveActor(ulong actorID)
+    {
+        _pending.RemoveAll(pending => pending.AOE.ActorID == actorID);
+        _resolved.RemoveAll(resolved => resolved.ActorID == actorID);
+    }
+}
+
+// Both weave variants pull affected players all the way to the binding. The six-yalm shape keeps
+// the movement preview limited to players who will actually be hit by the cast.
+sealed class MaliciousWeavePulls(BossModule module) : Components.SimpleKnockbackGroups(module,
+    [(uint)AID.MaliciousWeaveLong, (uint)AID.MaliciousWeaveShort], 60f, shape: new AOEShapeCircle(6f), kind: Kind.TowardsOrigin);
+
+// Hair Shears first resolves B7E5, then B9EF pulls each player hit by that line to its source about
+// 1.08 seconds later. The pull uses separate helpers, so resolve it by origin+rotation rather than
+// helper instance id.
+sealed class HairShearsPulls(BossModule module) : Components.GenericKnockback(module)
+{
+    private static readonly AOEShapeRect Shape = new(60f, 2f);
+    private readonly List<Knockback> _pulls = [with(8)];
+    private readonly HashSet<uint> _seenGlobalSequences = [];
+
+    public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor)
+    {
+        PruneExpired();
+        return CollectionsMarshal.AsSpan(_pulls);
+    }
+
+    public override void Update() => PruneExpired();
+
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
+    {
+        if (spell.Action.ID != (uint)AID.HairShearsLine || spell.EventHappened)
+            return;
+
+        _pulls.RemoveAll(pull => pull.ActorID == caster.InstanceID);
+        _pulls.Add(new(caster.Position, 60f, Module.CastFinishAt(spell, 1.1d), Shape, spell.Rotation, Kind.TowardsOrigin, actorID: caster.InstanceID));
+        _pulls.Sort((left, right) => left.Activation.CompareTo(right.Activation));
+    }
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
+    {
+        if (spell.Action.ID != (uint)AID.HairShearsPull || spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence))
+            return;
+
+        var index = _pulls.FindIndex(pull => pull.Origin.AlmostEqual(caster.Position, 0.5f) && pull.Direction.AlmostEqual(spell.Rotation, 2f.Degrees().Rad));
+        if (index >= 0)
+            _pulls.RemoveAt(index);
+        ++NumCasts;
+    }
+
+    public override void OnActorDestroyed(Actor actor) => _pulls.RemoveAll(pull => pull.ActorID == actor.InstanceID);
+
+    private void PruneExpired()
+    {
+        var now = WorldState.CurrentTime;
+        _pulls.RemoveAll(pull => now > pull.Activation.AddSeconds(1d));
+    }
+}
+
+sealed class AuraBurst(BossModule module) : Components.RaidwideCast(module, (uint)AID.AuraBurstVisual);
+
+sealed class DoubledTroubleStates : StateMachineBuilder
+{
+    public DoubledTroubleStates(BossModule module) : base(module)
+    {
+        TrivialPhase()
+            .ActivateOnEnter<CalofisteriAOEs>()
+            .ActivateOnEnter<DashingCuts>()
+            .ActivateOnEnter<MaliciousWeavePulls>()
+            .ActivateOnEnter<HairShearsPulls>()
+            .ActivateOnEnter<AuraBurst>();
+    }
+}
+
+[ModuleInfo(BossModuleInfo.Maturity.Contributed,
+    StatesType = typeof(DoubledTroubleStates),
+    ObjectIDType = typeof(OID),
+    ActionIDType = typeof(AID),
+    PrimaryActorOID = (uint)OID.Boss,
+    Contributors = "KanoNoUta",
+    Expansion = BossModuleInfo.Expansion.Dawntrail,
+    Category = BossModuleInfo.Category.Foray,
+    GroupType = BossModuleInfo.GroupType.CriticalEngagement,
+    GroupID = 1093u,
+    NameID = 50u,
+    SortOrder = 10)]
+public sealed class DoubledTrouble(WorldState ws, Actor primary) : BossModule(ws, primary, new(-215f, -65f), new ArenaBoundsCircle(20f))
+{
+    protected override void DrawEnemies(int pcSlot, Actor pc)
+    {
+        Arena.Actor(PrimaryActor);
+        Arena.Actors(Enemies((uint)OID.HairBinding));
+        Arena.Actors(Enemies((uint)OID.Hair));
+    }
+}

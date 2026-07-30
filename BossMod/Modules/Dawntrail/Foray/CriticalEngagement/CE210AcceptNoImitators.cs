@@ -31,6 +31,9 @@ public enum AID : uint
     HellishBreathHit2 = 0xBCDF,
     HellishBreathHit3 = 0xBCE0,
     HellishBreathHit4 = 0xBCE1,
+    HellishBreathQuickCenter = 0xBE16, // helper, 1.1s cast, range 60 60-degree cone
+    HellishBreathQuickLeft = 0xBE17, // helper, 1.1s cast, range 60 60-degree cone
+    HellishBreathQuickRight = 0xC5F5, // helper, 1.1s cast, range 60 60-degree cone
     CyclonicRing = 0xBCE2, // boss->self, 4.0s cast, range 10-30 donut
     ShapeshiftingSupercellVisual1 = 0xBCE3, // boss->self, 5.5s cast, visual
     ShapeshiftingSupercellVisual2 = 0xBCE4, // boss->self, 5.5s cast, visual
@@ -40,6 +43,7 @@ public enum AID : uint
     ShapeshiftingSupercellCircle = 0xBCE8, // helper->self, 6.0s cast, range 8 circle
     ShapeshiftingSupercellDonutInner = 0xBCE9, // helper->self, 6.0s cast, range 10-16 donut
     ShapeshiftingSupercellDonutOuter = 0xBCEA, // helper->self, 6.0s cast, range 16-30 donut
+    ShapeshiftingSupercellExtraCircle = 0xC64F, // helper->self, 6.0s cast, range 8 circle
     MadeMagicVisual = 0xBCEB, // boss->self, 4.0s cast, visual
     MadeMagic = 0xBCEC, // helper pulses; radius is modified by status 1909
     CycloneCrossingVisual = 0xBCED, // boss->self, 10.5s cast, visual
@@ -77,10 +81,11 @@ sealed class MorphingMageAOEs(BossModule module) : ReplayValidatedCastAOEs(modul
     {
         (uint)AID.TongueOfFlame => new(Tongue),
         (uint)AID.HellfireFetch => new(Hellfire, true),
-        (uint)AID.HellishBreathShort or (uint)AID.HellishBreathMedium or (uint)AID.HellishBreathLong => new(HellishBreath),
+        (uint)AID.HellishBreathShort or (uint)AID.HellishBreathMedium or (uint)AID.HellishBreathLong
+            or (uint)AID.HellishBreathQuickCenter or (uint)AID.HellishBreathQuickLeft or (uint)AID.HellishBreathQuickRight => new(HellishBreath),
         (uint)AID.CyclonicRing => new(CyclonicRing),
         (uint)AID.ShapeshiftingSupercellConeLong or (uint)AID.ShapeshiftingSupercellConeShort => new(SupercellCone),
-        (uint)AID.ShapeshiftingSupercellCircle => new(SupercellCircle),
+        (uint)AID.ShapeshiftingSupercellCircle or (uint)AID.ShapeshiftingSupercellExtraCircle => new(SupercellCircle),
         (uint)AID.ShapeshiftingSupercellDonutInner => new(SupercellInner),
         (uint)AID.ShapeshiftingSupercellDonutOuter => new(SupercellOuter),
         (uint)AID.CycloneCrossing => new(CycloneCross),

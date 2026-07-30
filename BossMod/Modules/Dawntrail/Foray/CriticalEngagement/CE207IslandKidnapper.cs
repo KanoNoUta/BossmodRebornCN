@@ -13,6 +13,8 @@ public enum OID : uint
 
 public enum AID : uint
 {
+    IdleVisual = 0xB949, // boss->event target, no effects
+    AutoAttack = 0xB94A, // boss->player, no cast, single-target
     WindBoundary = 0xB94B, // anchor, persistent 20-30y outer deathwall
     HurricaneVisual = 0xB94C,
     HurricaneKnockback = 0xB94D, // 5y away knockback

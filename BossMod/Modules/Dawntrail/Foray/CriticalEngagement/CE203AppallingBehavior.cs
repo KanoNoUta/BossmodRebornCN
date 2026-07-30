@@ -18,13 +18,19 @@ public enum AID : uint
     EsotericInstructionReverse = 0xC26E,
     ReversePolarity = 0xC26F,
 
+    BadBreathKeeperVisual = 0xC270, // Pallkeeper, self-only visual immediately after C271 resolves
     BadBreathInstruction = 0xC271, // helper, 50y 100-degree cone
+    PlaincrackerKeeperVisual = 0xC272, // Pallkeeper, self-only visual immediately after C273 resolves
     PlaincrackerInstruction = 0xC273, // helper, 30y circle
+
+    SwapOpposites = 0xC278, // four Pallkeepers teleport to the opposite cardinal point
+    SwapClockwise = 0xC279, // north/south Pallkeepers teleport clockwise
+    SwapCounterclockwise = 0xC27A, // east/west Pallkeepers teleport counterclockwise
 
     Roulette = 0xC27B,
     RouletteCenter = 0xC27C, // helper, 5y center cell
-    RouletteInner = 0xC27D, // helper, 5-12y 60-degree donut sector; two opposite helpers
-    RouletteOuter = 0xC27E, // helper, 12-20y 45-degree donut sector; two opposite helpers
+    RouletteInner = 0xC27D, // helper, 5-12y 120-degree donut sector; two opposite helpers
+    RouletteOuter = 0xC27E, // helper, 12-20y 90-degree donut sector; two opposite helpers
 
     LilliputianLyric = 0xC27F,
     LilliputianLyricAOE = 0xC280, // helper, 40y 180-degree cone
@@ -134,8 +140,11 @@ sealed class AppallingAOEs(BossModule module) : Components.GenericAOEs(module)
 sealed class DeathRouletteGrid(BossModule module) : Components.GenericAOEs(module)
 {
     private static readonly AOEShapeCircle CenterCell = new(5f);
-    private static readonly AOEShapeDonutSector InnerCell = new(5f, 12f, 30f.Degrees());
-    private static readonly AOEShapeDonutSector OuterCell = new(12f, 20f, 22.5f.Degrees());
+    // Replay hit coordinates put inner-ring victims as far as 56.1 degrees from the helper's
+    // facing. The action sectors are therefore 120/90 degrees wide (the shape API takes a
+    // half-angle), rather than the accidentally halved 60/45-degree display used previously.
+    private static readonly AOEShapeDonutSector InnerCell = new(5f, 12f, 60f.Degrees());
+    private static readonly AOEShapeDonutSector OuterCell = new(12f, 20f, 45f.Degrees());
     private readonly List<AOEInstance> _displayed = [];
     private readonly HashSet<uint> _seenSequences = [];
     private DateTime _activation;

@@ -12,6 +12,7 @@ public enum OID : uint
 
 public enum AID : uint
 {
+    AutoAttack = 0xC647, // boss->player, no cast, single-target
     ElementalSpillVisual = 0xB850,
     ElementalSpill1 = 0xB851,
     ElementalSpill2 = 0xB852,
@@ -32,6 +33,9 @@ public enum AID : uint
     ElementalShockwave3 = 0xB861,
     ElementalShockwave4 = 0xB862,
     ElementalShockwave5 = 0xB863, // helper->location, 8y circles
+    ManyHeadedBreath1 = 0xB865, // boss self-only head/model transition
+    ManyHeadedBreath2 = 0xB866, // boss self-only head/model transition
+    ManyHeadedBreath3 = 0xB867, // boss self-only head/model transition
     StarlightBreath = 0xB868,
     QuintetRoar = 0xB869,
     QuintetRoarHit = 0xB86A,

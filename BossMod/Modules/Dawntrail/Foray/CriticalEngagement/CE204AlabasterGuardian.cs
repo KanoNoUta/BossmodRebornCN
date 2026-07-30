@@ -12,6 +12,7 @@ public enum OID : uint
 
 public enum AID : uint
 {
+    AutoAttack = 0xC648, // boss->player, no cast, single-target
     Summon = 0xB832,
     FourfoldCommand = 0xB833,
     AttackCommand = 0xB834,

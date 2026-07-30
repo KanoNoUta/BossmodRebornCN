@@ -13,6 +13,7 @@ public enum OID : uint
 
 public enum AID : uint
 {
+    AutoAttack = 0xC6A4, // boss->player, no cast, single-target
     LethalBoundary = 0xBFD0, // controller, persistent out-of-bounds kill field
     YellowGemstones = 0xBC98,
     YellowGemActiveVisual = 0xBC99, // yellow gem->location, 3.0s cast, no damage event
@@ -30,7 +31,10 @@ public enum AID : uint
     ClawThenTailSecond = 0xBCA8,
     TailThenClawSecond = 0xBCA9,
     Howl = 0xBCAA,
+    ComboEndVisual = 0xBCAB, // boss, no targets/effects; animation-only combo terminator
     RubyOuterReflection = 0xC4F2,
+    RevertModel = 0xC51D, // boss, model-state reset after the claw/tail sequence
+    RubyGlowHit = 0xC5CD, // helpers, split packets for the Ruby Light raidwide
     HowlAlt = 0xC161,
     RavenousGodsCircleHit = 0xC162,
     RavenousGodsAsideHit = 0xC163

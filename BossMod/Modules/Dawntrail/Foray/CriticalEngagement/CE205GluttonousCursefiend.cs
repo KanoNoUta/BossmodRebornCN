@@ -6,6 +6,8 @@ namespace BossMod.Dawntrail.Foray.CriticalEngagement.CE205GluttonousCursefiend;
 public enum OID : uint
 {
     Boss = 0x4C4B, // R3.0, BNpcName 14790, Algol
+    Tomato = 0x4C4C, // R0.9, Crescent Tomato
+    Onion = 0x4C4D, // R0.9, Crescent Onion
     Controller = 0x4D87, // non-targetable mechanic and arena controller
     Helper = 0x233C
 }
@@ -25,10 +27,12 @@ public enum AID : uint
     TomatoMiasma2 = 0xBBEF,
     OnionMiasma2 = 0xBBF0,
     SpinningDrawInCone = 0xBBF1, // 30y 30-degree cone
-    SpinningDrawIn = 0xBBF2,
+    SpinningDrawIn = 0xBBF2, // repeated 30y 30-degree cone, 12y draw-in
+    SpinningDrawInEnd = 0xBBF3,
     MiasmaBoundary = 0xBBF6, // controller, persistent 20-30y outer deathwall
     GreatMiasmaCannon1 = 0xBBF4, // 40y long, 50y wide rect
     CorruptMiasma1 = 0xBBF5, // 12y circle
+    SpinningDrawInNear = 0xBC79, // repeated 7y 30-degree cone, synchronized with SpinningDrawIn
     CursevoiceAlt = 0xBF4B,
     DevourAlt1 = 0xC4F6, // 12y 120-degree cone
     GreatMiasmaCannonVisual = 0xC4F7,
@@ -38,6 +42,7 @@ public enum AID : uint
     PiercingScreamAlt = 0xC4FB,
     DevourAlt2 = 0xC523,
     DevourShort = 0xC525, // 8y 120-degree cone
+    AutoAttack = 0xC5D4,
     SpinningDrawInAlt = 0xC6FE
 }
 
@@ -72,38 +77,120 @@ sealed class AlgolAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
     };
 }
 
-// The damaging pull packets have no cast bar. Their preceding helper cones provide the stable
-// origin, direction and activation used for movement hints.
+// The normal cone resolves at the end of its cast. Spinning Inhale then emits 15-degree ticks for
+// roughly five seconds after the visual cast; predict the next tick instead of dropping the hint at
+// cast finish. BBE7/C6FE only pull vegetables and must not drive player movement hints.
 sealed class AlgolDrawIn(BossModule module) : Components.GenericKnockback(module)
 {
+    private const float PullDistance = 12f;
+    private const double SpinTickInterval = 0.2d;
     private static readonly AOEShapeCone LongCone = new(60f, 15f.Degrees());
     private static readonly AOEShapeCone ShortCone = new(30f, 15f.Degrees());
-    private readonly List<Knockback> _sources = [];
+    private readonly List<Knockback> _active = [with(2)];
+    private Knockback? _normal;
+    private Knockback? _spinning;
+    private Angle _spinInitialDirection;
+    private Angle _spinLastDirection;
+    private Angle _spinStep;
+    private DateTime _spinExpiresAt;
+    private bool _spinEnding;
 
-    public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor) => CollectionsMarshal.AsSpan(_sources);
+    public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor)
+    {
+        PruneExpired();
+        _active.Clear();
+        if (_normal is { } normal)
+            _active.Add(normal);
+        if (_spinning is { } spinning)
+            _active.Add(spinning);
+        _active.Sort((left, right) => left.Activation.CompareTo(right.Activation));
+        return CollectionsMarshal.AsSpan(_active);
+    }
+
+    public override void Update() => PruneExpired();
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
-        var shape = spell.Action.ID switch
+        switch (spell.Action.ID)
         {
-            (uint)AID.DrawInCone => LongCone,
-            (uint)AID.SpinningDrawInCone => ShortCone,
-            _ => null
-        };
-        if (shape != null)
-        {
-            _sources.RemoveAll(source => source.ActorID == caster.InstanceID);
-            _sources.Add(new(caster.Position, 50f, Module.CastFinishAt(spell), shape, spell.Rotation, Kind.TowardsOrigin, actorID: caster.InstanceID));
+            case (uint)AID.DrawInCone:
+                if (!spell.EventHappened)
+                    _normal = new(caster.Position, PullDistance, Module.CastFinishAt(spell), LongCone, spell.Rotation, Kind.TowardsOrigin, actorID: caster.InstanceID);
+                break;
+            case (uint)AID.SpinningDrawInCone:
+                if (spell.EventHappened)
+                    break;
+                _spinInitialDirection = _spinLastDirection = spell.Rotation;
+                _spinStep = default;
+                _spinEnding = false;
+                var activation = Module.CastFinishAt(spell).AddSeconds(SpinTickInterval);
+                _spinExpiresAt = activation.AddSeconds(0.75d);
+                _spinning = new(caster.Position, PullDistance, activation, ShortCone, spell.Rotation, Kind.TowardsOrigin, actorID: caster.InstanceID);
+                break;
         }
     }
 
     public override void OnCastFinished(Actor caster, ActorCastInfo spell)
     {
-        if (spell.Action.ID is (uint)AID.DrawInCone or (uint)AID.SpinningDrawInCone)
-            _sources.RemoveAll(source => source.ActorID == caster.InstanceID);
+        if (spell.Action.ID == (uint)AID.DrawInCone && _normal is { } normal && normal.ActorID == caster.InstanceID)
+            _normal = null;
     }
 
-    public override void OnActorDestroyed(Actor actor) => _sources.RemoveAll(source => source.ActorID == actor.InstanceID);
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
+    {
+        switch (spell.Action.ID)
+        {
+            case (uint)AID.DrawInCone:
+                _normal = null;
+                ++NumCasts;
+                break;
+            case (uint)AID.SpinningDrawIn:
+                ++NumCasts;
+                if (_spinEnding && spell.Rotation.AlmostEqual(_spinInitialDirection, 2f.Degrees().Rad))
+                {
+                    ClearSpin();
+                    break;
+                }
+
+                var step = (spell.Rotation - _spinLastDirection).Normalized();
+                if (MathF.Abs(step.Deg) is >= 5f and <= 30f)
+                    _spinStep = step;
+                _spinLastDirection = spell.Rotation;
+                var predictedDirection = spell.Rotation + _spinStep;
+                var activation = WorldState.FutureTime(SpinTickInterval);
+                _spinExpiresAt = WorldState.FutureTime(0.75d);
+                _spinning = new(caster.Position, PullDistance, activation, ShortCone, predictedDirection, Kind.TowardsOrigin, actorID: Module.PrimaryActor.InstanceID);
+                break;
+            case (uint)AID.SpinningDrawInEnd:
+                _spinEnding = true;
+                break;
+        }
+    }
+
+    public override void OnActorDestroyed(Actor actor)
+    {
+        if (_normal is { } normal && normal.ActorID == actor.InstanceID)
+            _normal = null;
+        if (actor.InstanceID == Module.PrimaryActor.InstanceID)
+            ClearSpin();
+    }
+
+    private void PruneExpired()
+    {
+        var now = WorldState.CurrentTime;
+        if (_normal is { } normal && now > normal.Activation.AddSeconds(0.5d))
+            _normal = null;
+        if (_spinning != null && now > _spinExpiresAt)
+            ClearSpin();
+    }
+
+    private void ClearSpin()
+    {
+        _spinning = null;
+        _spinExpiresAt = default;
+        _spinEnding = false;
+        _spinStep = default;
+    }
 }
 
 sealed class AlgolRaidwides(BossModule module) : Components.RaidwideCasts(module, [(uint)AID.Cursevoice, (uint)AID.CursevoiceAlt, (uint)AID.PiercingScream, (uint)AID.PiercingScreamAlt]);
