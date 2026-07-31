@@ -74,19 +74,65 @@ sealed class TopazRay(BossModule module) : ReplayValidatedCastAOEs(module)
     protected override AOEConfig? ConfigFor(uint actionID) => actionID == (uint)AID.TopazRay ? new(Shape, true) : null;
 }
 
-sealed class CircularKnockback(BossModule module) : Components.SimpleKnockbacks(module, (uint)AID.CircularKnockbackTelegraph, 30f, shape: new AOEShapeCircle(60f));
+// BCA0 telegraphs a 60y radial knockback; the actual hit (C162) lands roughly six seconds after the
+// short telegraph finishes. Keep the arrow visible until the hit instead of dropping it at cast end.
+sealed class CircularKnockback(BossModule module) : Components.GenericKnockback(module)
+{
+    private static readonly AOEShapeCircle Shape = new(60f);
+    private const double HitDelay = 6d;
+    private readonly List<Knockback> _casters = [];
+    private readonly List<Knockback> _displayed = [with(4)];
+
+    public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor)
+    {
+        PruneExpired();
+        _displayed.Clear();
+        _displayed.AddRange(_casters);
+        return CollectionsMarshal.AsSpan(_displayed);
+    }
+
+    public override void Update() => PruneExpired();
+
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
+    {
+        if (spell.Action.ID == (uint)AID.CircularKnockbackTelegraph)
+        {
+            _casters.RemoveAll(k => k.ActorID == caster.InstanceID);
+            _casters.Add(new(spell.LocXZ, 30f, Module.CastFinishAt(spell).AddSeconds(HitDelay), Shape, spell.Rotation, Kind.AwayFromOrigin, actorID: caster.InstanceID));
+        }
+    }
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
+    {
+        if (spell.Action.ID == (uint)AID.RavenousGodsCircleHit)
+        {
+            _casters.Clear();
+            ++NumCasts;
+        }
+    }
+
+    private void PruneExpired()
+    {
+        var now = WorldState.CurrentTime;
+        _casters.RemoveAll(k => now > k.Activation.AddSeconds(1d));
+    }
+}
 
 // Knockback rows 90/91 are selected per target: players on opposite sides of the center line are
 // pushed in opposite directions. A fixed left/right arrow would therefore be wrong for half of
 // the raid; derive the side from each player's position relative to the helper's cast direction.
+// BCA1 telegraphs the lateral knockback; the real hit (C163) lands roughly six seconds after the
+// short telegraph finishes, so the arrow must stay visible until then.
 sealed class KnockAside(BossModule module) : Components.GenericKnockback(module)
 {
     private static readonly AOEShapeRect Shape = new(40f, 30f);
+    private const double HitDelay = 6d;
     private readonly List<(WPos Origin, Angle Rotation, DateTime Activation, ulong ActorID)> _casters = [];
     private readonly List<Knockback> _displayed = [with(4)];
 
     public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor)
     {
+        PruneExpired();
         _displayed.Clear();
         foreach (var source in _casters)
         {
@@ -97,22 +143,33 @@ sealed class KnockAside(BossModule module) : Components.GenericKnockback(module)
         return CollectionsMarshal.AsSpan(_displayed);
     }
 
+    public override void Update() => PruneExpired();
+
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
         if (spell.Action.ID == (uint)AID.KnockAsideTelegraph)
         {
             _casters.RemoveAll(source => source.ActorID == caster.InstanceID);
-            _casters.Add((caster.Position, spell.Rotation, Module.CastFinishAt(spell), caster.InstanceID));
+            _casters.Add((caster.Position, spell.Rotation, Module.CastFinishAt(spell).AddSeconds(HitDelay), caster.InstanceID));
         }
     }
 
-    public override void OnCastFinished(Actor caster, ActorCastInfo spell)
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
     {
-        if (spell.Action.ID == (uint)AID.KnockAsideTelegraph)
-            _casters.RemoveAll(source => source.ActorID == caster.InstanceID);
+        if (spell.Action.ID == (uint)AID.RavenousGodsAsideHit)
+        {
+            _casters.Clear();
+            ++NumCasts;
+        }
     }
 
     public override void OnActorDestroyed(Actor actor) => _casters.RemoveAll(source => source.ActorID == actor.InstanceID);
+
+    private void PruneExpired()
+    {
+        var now = WorldState.CurrentTime;
+        _casters.RemoveAll(source => now > source.Activation.AddSeconds(1d));
+    }
 }
 sealed class GemstoneRaidwides(BossModule module) : Components.RaidwideCasts(module, [(uint)AID.RubyLight, (uint)AID.RavenousGods, (uint)AID.Howl]);
 sealed class RubyReflectionHint(BossModule module) : Components.CastHint(module, (uint)AID.RubyLight, "Ruby reflection - watch the gemstone lines");

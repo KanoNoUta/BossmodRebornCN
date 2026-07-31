@@ -54,17 +54,24 @@ public enum AID : uint
 // refresh a nearby known pool but must never create a new one.
 sealed class ToxinPools(BossModule module) : Components.GenericAOEs(module)
 {
-    private static readonly AOEShapeCircle Shape = new(1f);
+    // The green puddle spawns small and expands over roughly nine seconds (replay tick distances
+    // grow from ~2.5y to ~7.5y), so the persistent hazard is drawn at its current radius.
+    private const float InitialRadius = 2.5f;
+    private const float MaxRadius = 7.5f;
+    private const float GrowthPerSecond = 0.55f;
     private const float PositionTolerance = 0.75f;
     private const double PredictedLifetime = 10.5d;
     private const double TickLifetime = 1.25d;
 
-    private sealed class Pool(WPos origin, DateTime activation, DateTime expiresAt)
+    private sealed class Pool(WPos origin, DateTime createdAt, DateTime expiresAt)
     {
         public readonly WPos Origin = origin;
-        public readonly DateTime Activation = activation;
+        public DateTime CreatedAt = createdAt;
         public DateTime ExpiresAt = expiresAt;
     }
+
+    private static float CurrentRadius(DateTime now, DateTime createdAt)
+        => MathF.Min(MaxRadius, InitialRadius + (float)(now - createdAt).TotalSeconds * GrowthPerSecond);
 
     private readonly List<Pool> _pools = [with(4)];
     private readonly List<AOEInstance> _active = [with(4)];
@@ -74,9 +81,11 @@ sealed class ToxinPools(BossModule module) : Components.GenericAOEs(module)
     {
         PruneExpired();
         _active.Clear();
+        var now = WorldState.CurrentTime;
         foreach (var pool in _pools)
         {
-            _active.Add(new(Shape, pool.Origin, activation: pool.Activation, shapeDistance: Shape.Distance(pool.Origin, default)));
+            var shape = new AOEShapeCircle(CurrentRadius(now, pool.CreatedAt));
+            _active.Add(new(shape, pool.Origin, activation: pool.CreatedAt, shapeDistance: shape.Distance(pool.Origin, default)));
         }
         return CollectionsMarshal.AsSpan(_active);
     }
@@ -109,6 +118,10 @@ sealed class ToxinPools(BossModule module) : Components.GenericAOEs(module)
             // The spill prediction covers the packet gap before the first tick. Once ticks begin,
             // their cadence is authoritative; assigning (rather than only extending) also keeps
             // accelerated client-replay captures from retaining pools for ten wall-clock seconds.
+            if (isSpill)
+            {
+                pool.CreatedAt = now; // a fresh puddle forms, so its expansion restarts
+            }
             if (!isSpill || refreshedExpiry > pool.ExpiresAt)
             {
                 pool.ExpiresAt = refreshedExpiry;

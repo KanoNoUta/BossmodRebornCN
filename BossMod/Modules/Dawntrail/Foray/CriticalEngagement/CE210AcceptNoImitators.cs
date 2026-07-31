@@ -119,6 +119,16 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
         return CollectionsMarshal.AsSpan(_displayed);
     }
 
+    public override void Update()
+    {
+        // The four helpers can persist after the mechanic without a status-loss packet (replays and
+        // live packet loss both do this). If no pulse has refreshed a ring for a while, it is stale
+        // and must not remain drawn until the next mechanic.
+        var now = WorldState.CurrentTime;
+        foreach (var key in _pending.Keys.Where(key => now > _pending[key].Activation.AddSeconds(1.5d)).ToArray())
+            _pending.Remove(key);
+    }
+
     public override void OnStatusGain(Actor actor, ref ActorStatus status)
     {
         if (actor.OID != (uint)OID.Helper || !actor.Position.InCircle(Arena.Center, 30f)

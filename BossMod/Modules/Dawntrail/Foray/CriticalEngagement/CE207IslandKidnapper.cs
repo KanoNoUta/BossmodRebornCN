@@ -76,7 +76,7 @@ sealed class HurricaneHazards(BossModule module) : Components.GenericAOEs(module
         _displayed.Clear();
         foreach (var hurricane in Module.Enemies((uint)OID.Hurricane))
             if (!hurricane.IsDeadOrDestroyed)
-                _displayed.Add(new(Shape, hurricane.Position, actorID: hurricane.InstanceID,
+                _displayed.Add(new(Shape, hurricane.Position, color: Colors.Danger, actorID: hurricane.InstanceID,
                     shapeDistance: Shape.Distance(hurricane.Position, default)));
         return CollectionsMarshal.AsSpan(_displayed);
     }
@@ -86,7 +86,10 @@ sealed class HurricaneHazards(BossModule module) : Components.GenericAOEs(module
 // five-yalm radial knockback inside the four-yalm hit area, so keep the live actor position.
 sealed class HurricaneKnockbacks(BossModule module) : Components.GenericKnockback(module)
 {
-    private static readonly AOEShapeCircle Shape = new(4f);
+    // Contact is four yalms, but a warning only drawn inside the contact circle is invisible until
+    // the player is already being knocked. Use a wider preview radius so the arrow appears as the
+    // moving storm approaches; the separate HurricaneHazards circle still marks the lethal body.
+    private static readonly AOEShapeCircle Shape = new(10f);
     private readonly List<Knockback> _displayed = [with(8)];
 
     public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor)
@@ -94,7 +97,7 @@ sealed class HurricaneKnockbacks(BossModule module) : Components.GenericKnockbac
         _displayed.Clear();
         foreach (var hurricane in Module.Enemies((uint)OID.Hurricane))
             if (!hurricane.IsDeadOrDestroyed)
-                _displayed.Add(new(hurricane.Position, 5f, shape: Shape, actorID: hurricane.InstanceID));
+                _displayed.Add(new(hurricane.Position, 5f, WorldState.FutureTime(0.25d), Shape, default, Kind.AwayFromOrigin, actorID: hurricane.InstanceID));
         return CollectionsMarshal.AsSpan(_displayed);
     }
 }

@@ -38,7 +38,7 @@ sealed class EvilSeerStates : StateMachineBuilder {
     }
 }
 
-[ModuleInfo(BossModuleInfo.Maturity.WIP,
+[ModuleInfo(BossModuleInfo.Maturity.Contributed,
     StatesType = typeof(EvilSeerStates),
     ConfigType = null, // replace null with typeof(EvilSeerConfig) if applicable
     ObjectIDType = typeof(OID),

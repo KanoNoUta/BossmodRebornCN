@@ -4,6 +4,7 @@ public enum OID : uint
 {
     RegnantChimera = 0x4C7D, // R5.180
     FulmipotentOrb = 0x4C7F,
+    IceOrb = 0x4C80, // ice orb, spawns during the fight and emits 12y ice-roar circles
     ChaoticNoise = 0x4B71,
 }
 
@@ -16,6 +17,10 @@ public enum AID : uint
     DragonsVoice = 48634, // RegnantChimera->self, 4.0s cast, range 8-30 donut
     DragonsVoiceOrb = 48636, // FulmipotentOrb->self, 4.0s cast, range 8-30 donut
     DragonsBreathThird = 49747, // RegnantChimera->self, no cast, range 30 120-degree cone; third hit, 240 degrees clockwise
+    IceBreathFirst = 48631, // RegnantChimera->self, 6.0s cast, range 30 120-degree cone; first of three counterclockwise hits
+    IceBreathSecond = 48632, // RegnantChimera->self, no cast, second hit, 120 degrees counterclockwise
+    IceBreathThird = 49748, // RegnantChimera->self, no cast, third hit, 240 degrees counterclockwise
+    IceRoar = 48635, // IceOrb->self, 1.0s cast, range 12 circle
     LeftDuobreath = 50111, // RegnantChimera->self, 5.0s cast, range 40 180-degree cone; left then right (dragon first)
     RightDuobreath = 50112, // RegnantChimera->self, 5.0s cast, range 40 180-degree cone; right then left (ram first)
     Cacophony = 50113, // RegnantChimera->self, 4.0s cast, single-target
@@ -163,6 +168,76 @@ sealed class Duobreath(BossModule module) : Components.GenericAOEs(module)
     private void RemoveActor(ulong actorID)
         => _pending.RemoveAll(entry => entry.AOE.ActorID == actorID);
 }
+// Mirrors the thunder breath, but the ice version rotates counterclockwise (+120 degrees per step,
+// replay-verified: first hit 135->180 packet facing, second 180+120, third 180+240) with the same
+// 2.72s/5.49s cadence.
+sealed class IceBreathSequence(BossModule module) : Components.GenericAOEs(module)
+{
+    private readonly record struct Pending(uint ActionID, AOEInstance AOE);
+
+    private static readonly AOEShapeCone Shape = new(30f, 60f.Degrees());
+    private static readonly Angle Step = 120f.Degrees();
+    private readonly List<Pending> _pending = [with(3)];
+    private readonly List<AOEInstance> _displayed = [with(2)];
+    private readonly HashSet<uint> _seenGlobalSequences = [];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
+    {
+        PruneExpired();
+        _displayed.Clear();
+        var count = Math.Min(_pending.Count, 2);
+        for (var i = 0; i < count; ++i)
+        {
+            var aoe = _pending[i].AOE;
+            if (i == 0 && count > 1)
+                aoe.Color = Colors.Danger;
+            _displayed.Add(aoe);
+        }
+        return CollectionsMarshal.AsSpan(_displayed);
+    }
+
+    public override void Update() => PruneExpired();
+
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
+    {
+        if (spell.Action.ID != (uint)AID.IceBreathFirst || spell.EventHappened)
+            return;
+
+        var firstActivation = Module.CastFinishAt(spell);
+        if (firstActivation <= WorldState.CurrentTime)
+            return;
+
+        _pending.Clear();
+        Add(AID.IceBreathFirst, caster, spell.Rotation, firstActivation);
+        Add(AID.IceBreathSecond, caster, spell.Rotation + Step, firstActivation.AddSeconds(2.72d));
+        Add(AID.IceBreathThird, caster, spell.Rotation + 2f * Step, firstActivation.AddSeconds(5.49d));
+    }
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
+    {
+        if (spell.Action.ID is not ((uint)AID.IceBreathFirst or (uint)AID.IceBreathSecond or (uint)AID.IceBreathThird)
+            || spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence))
+            return;
+
+        ++NumCasts;
+        _pending.RemoveAll(entry => entry.ActionID == spell.Action.ID && entry.AOE.ActorID == caster.InstanceID);
+        PruneExpired();
+    }
+
+    public override void OnActorDeath(Actor actor) => RemoveActor(actor.InstanceID);
+    public override void OnActorDestroyed(Actor actor) => RemoveActor(actor.InstanceID);
+
+    private void Add(AID action, Actor caster, Angle rotation, DateTime activation)
+        => _pending.Add(new((uint)action, new(Shape, caster.Position, rotation, activation, actorID: caster.InstanceID, shapeDistance: Shape.Distance(caster.Position, rotation))));
+
+    private void PruneExpired()
+        => _pending.RemoveAll(entry => WorldState.CurrentTime > entry.AOE.Activation.AddSeconds(0.75d));
+
+    private void RemoveActor(ulong actorID)
+        => _pending.RemoveAll(entry => entry.AOE.ActorID == actorID);
+}
+
+sealed class IceRoar(BossModule module) : Components.SimpleAOEs(module, (uint)AID.IceRoar, new AOEShapeCircle(12f));
 sealed class ChaoticChorus(BossModule module) : Components.SimpleAOEs(module, (uint)AID.ChaoticChorus, new AOEShapeCircle(6f));
 sealed class RamsVoice(BossModule module) : Components.SimpleAOEs(module, (uint)AID.RamsVoice, new AOEShapeCircle(9f));
 sealed class DragonsVoice(BossModule module) : Components.SimpleAOEGroups(module,
@@ -175,7 +250,9 @@ sealed class RegnantChimeraStates : StateMachineBuilder
     {
         TrivialPhase()
             .ActivateOnEnter<DragonsBreathSequence>()
+            .ActivateOnEnter<IceBreathSequence>()
             .ActivateOnEnter<Duobreath>()
+            .ActivateOnEnter<IceRoar>()
             .ActivateOnEnter<ChaoticChorus>()
             .ActivateOnEnter<RamsVoice>()
             .ActivateOnEnter<DragonsVoice>();

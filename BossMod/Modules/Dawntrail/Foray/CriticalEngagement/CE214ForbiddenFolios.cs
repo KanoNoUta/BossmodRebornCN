@@ -75,7 +75,6 @@ sealed class BasicAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
     private static readonly AOEShapeCone Cover = new(30f, 90f.Degrees());
     private static readonly AOEShapeCircle BookDrop = new(3f);
     private static readonly AOEShapeCone FireII = new(60f, 22.5f.Degrees());
-    private static readonly AOEShapeCircle UnboundInk = new(9f);
 
     // Blot grids expose several waves up front (commonly 3/3/3 at two-second intervals). Keep
     // later waves as previews, but only the earliest simultaneous group may steer automation.
@@ -87,7 +86,6 @@ sealed class BasicAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
         (uint)AID.CoverToCoverFirst or (uint)AID.CoverToCoverSecond => new(Cover),
         (uint)AID.BookDrop => new(BookDrop),
         (uint)AID.FireII => new(FireII),
-        (uint)AID.UnboundInk => new(UnboundInk),
         _ => null
     };
 }
@@ -366,6 +364,10 @@ sealed class KnowledgeSectors(BossModule module) : Components.GenericAOEs(module
     }
 }
 
+// Unbound Ink is a soak tower for a single player; drawing it as a red avoidable circle made
+// automation run away from it. CastTowers renders it as a tower and steers one player inside.
+sealed class UnboundInkTower(BossModule module) : Components.CastTowers(module, (uint)AID.UnboundInk, 9f, 1, 1);
+
 // The three B8DF helpers carry duplicate damage packets; the boss cast is the stable warning.
 sealed class Marginalia(BossModule module) : Components.RaidwideCast(module, (uint)AID.Marginalia);
 
@@ -378,6 +380,7 @@ sealed class ForbiddenFoliosStates : StateMachineBuilder
             .ActivateOnEnter<ThunderII>()
             .ActivateOnEnter<HorizontalRule>()
             .ActivateOnEnter<KnowledgeSectors>()
+            .ActivateOnEnter<UnboundInkTower>()
             .ActivateOnEnter<Marginalia>();
     }
 }

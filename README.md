@@ -1,4 +1,4 @@
-# [![](https://raw.githubusercontent.com/FFXIV-CombatReborn/RebornAssets/main/IconAssets/BMR_Icon.png)](https://github.com/KanoNoUta/BossmodRebornCN)
+﻿# [![](https://raw.githubusercontent.com/FFXIV-CombatReborn/RebornAssets/main/IconAssets/BMR_Icon.png)](https://github.com/KanoNoUta/BossmodRebornCN)
 
 **BossMod Reborn CN**
 
@@ -15,7 +15,7 @@ BossMod Reborn CN 是由 KanoNoUta 维护的国服适配版本，当前对应国
 - 惨白魔人的死亡轮盘按实测 5–12m/12–20m 极坐标扇区绘制，并跟随 helper 的实时坐标、朝向与极性换位。
 - 阿尔戈尔旋转拉拽、连续半场、圆形击退与横向击退均按 replay/客户端 ActionEffect 的实际时序处理。
 - 7.5.5.8 修正雪石膏之剑与宝石兽半场方向、卡洛菲斯提莉左右刀、魔亡灵法师直条和古术魔典圆形场地，并补强阿尔戈尔旋转吸引 AI 与诱拐魔冰花提示。
-- 7.5.5.10 校准惨白魔人死亡轮盘与新月女王九连环时序，修复阿尔戈尔/诱拐魔电网贴边、诱拐魔十字月环和旋风、魔许德拉绿毒圈及赤龙旋转毒圈。
+- 7.5.5.11 校准神木巨人移动刀片危险色，补齐统领奇美拉寒冰吐息与冰球咆哮，开启北岛四 FATE 绘制，并修正毒圈扩圈、残留清理与击退提示。
 - 补全统领奇美拉三连吐息、玛琦塔八连挥击与唤雷者 Freefall 三段落点。
 
 第三方插件库：`https://raw.githubusercontent.com/KanoNoUta/DalamudPlugins/main/pluginmaster.json`

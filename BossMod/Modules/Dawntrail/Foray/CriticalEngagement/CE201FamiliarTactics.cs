@@ -61,7 +61,9 @@ sealed class UnbowedSpirit(BossModule module) : Components.GenericAOEs(module)
         if (!blade.IsDeadOrDestroyed)
         {
             var origin = blade.Position;
-            _active.Add(new(Shape, origin, actorID: blade.InstanceID, shapeDistance: Shape.Distance(origin, default)));
+            // Persistent moving hazards must be drawn as imminent danger, otherwise the light-yellow
+            // preview color reads as non-risky and automation has no reason to avoid the blade.
+            _active.Add(new(Shape, origin, color: Colors.Danger, actorID: blade.InstanceID, shapeDistance: Shape.Distance(origin, default)));
         }
     }
 }

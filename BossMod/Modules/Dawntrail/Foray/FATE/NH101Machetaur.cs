@@ -165,7 +165,7 @@ sealed class MachetaurStates : StateMachineBuilder
     }
 }
 
-[ModuleInfo(BossModuleInfo.Maturity.WIP,
+[ModuleInfo(BossModuleInfo.Maturity.Contributed,
     StatesType = typeof(MachetaurStates),
     ConfigType = null, // replace null with typeof(MachetaurConfig) if applicable
     ObjectIDType = typeof(OID),
