@@ -136,6 +136,16 @@ sealed class AppallingAOEs(BossModule module) : Components.GenericAOEs(module)
     }
 }
 
+// C26B is the persistent electric fence at the arena edge: the only clean boundary hit is 20.1y
+// from center and the walkable area is a 20y circle, so mark the edge with a thin danger ring.
+sealed class ElectricBoundary(BossModule module) : Components.GenericAOEs(module)
+{
+    private static readonly AOEShapeDonut Shape = new(19.5f, 21f);
+    private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
+}
+
 // Death Roulette is a polar grid, not the C26B 18-25y donut that used to be drawn here. ARR v5
 // recordings show five fixed helpers owned by the boss: boss+6 is the center, boss+37/+38 are the
 // opposite inner sectors and boss+39/+40 the opposite outer sectors. Their 0x022A movement packets
@@ -168,18 +178,23 @@ sealed class DeathRouletteGrid(BossModule module) : Components.GenericAOEs(modul
         var inner2 = Helper(38);
         var outer1 = Helper(39);
         var outer2 = Helper(40);
-        // Spawn coordinates are intentionally parked at the boss. Only publish the grid once all
-        // four sector helpers have received their center movement packet; this avoids fake safespots.
-        if (inner1 == null || inner2 == null || outer1 == null || outer2 == null ||
-            (inner1.Position - Module.Arena.Center).LengthSq() > 1f || (inner2.Position - Module.Arena.Center).LengthSq() > 1f ||
-            (outer1.Position - Module.Arena.Center).LengthSq() > 1f || (outer2.Position - Module.Arena.Center).LengthSq() > 1f)
+        if (inner1 == null || inner2 == null || outer1 == null || outer2 == null)
             return CollectionsMarshal.AsSpan(_displayed);
 
-        Add(CenterCell, default);
-        Add(InnerCell, inner1.Rotation, inner1.InstanceID);
-        Add(InnerCell, inner2.Rotation, inner2.InstanceID);
-        Add(OuterCell, outer1.Rotation, outer1.InstanceID);
-        Add(OuterCell, outer2.Rotation, outer2.InstanceID);
+        // The game only transmits the final sector orientation at the reveal (~0.09s before the
+        // hit), and the helpers are parked at the boss until then. Publish the wheel immediately so
+        // the first roulette is visible at all; the always-dangerous center stays red, while the
+        // sector cells turn dangerous the moment the helpers are confirmed at the arena center.
+        var confirmed = (inner1.Position - Module.Arena.Center).LengthSq() <= 1f
+            && (inner2.Position - Module.Arena.Center).LengthSq() <= 1f
+            && (outer1.Position - Module.Arena.Center).LengthSq() <= 1f
+            && (outer2.Position - Module.Arena.Center).LengthSq() <= 1f;
+
+        Add(CenterCell, default, true);
+        Add(InnerCell, inner1.Rotation, confirmed, inner1.InstanceID);
+        Add(InnerCell, inner2.Rotation, confirmed, inner2.InstanceID);
+        Add(OuterCell, outer1.Rotation, confirmed, outer1.InstanceID);
+        Add(OuterCell, outer2.Rotation, confirmed, outer2.InstanceID);
         return CollectionsMarshal.AsSpan(_displayed);
     }
 
@@ -220,8 +235,8 @@ sealed class DeathRouletteGrid(BossModule module) : Components.GenericAOEs(modul
         return actor?.OID == (uint)OID.Helper ? actor : null;
     }
 
-    private void Add(AOEShape shape, Angle rotation, ulong actorID = 0)
-        => _displayed.Add(new(shape, Module.Arena.Center, rotation, _activation, actorID: actorID, shapeDistance: shape.Distance(Module.Arena.Center, rotation)));
+    private void Add(AOEShape shape, Angle rotation, bool risky, ulong actorID = 0)
+        => _displayed.Add(new(shape, Module.Arena.Center, rotation, _activation, risky ? Colors.Danger : Colors.AOE, risky, actorID, shape.Distance(Module.Arena.Center, rotation)));
 
     private void Arm(DateTime activation)
     {
@@ -253,6 +268,7 @@ sealed class AppallingBehaviorStates : StateMachineBuilder
     public AppallingBehaviorStates(BossModule module) : base(module)
     {
         TrivialPhase()
+            .ActivateOnEnter<ElectricBoundary>()
             .ActivateOnEnter<AppallingAOEs>()
             .ActivateOnEnter<DeathRouletteGrid>()
             .ActivateOnEnter<GreatWhirlwind>();

@@ -114,7 +114,7 @@ sealed class StormcallerStates : StateMachineBuilder {
     }
 }
 
-[ModuleInfo(BossModuleInfo.Maturity.WIP,
+[ModuleInfo(BossModuleInfo.Maturity.Contributed,
     StatesType = typeof(StormcallerStates),
     ConfigType = null, // replace null with typeof(StormcallerConfig) if applicable
     ObjectIDType = typeof(OID),

@@ -59,9 +59,11 @@ public enum SID : uint
     AreaOfInfluenceUp = 1909 // Made Magic helper, extra 1-7; circle radius = extra * 2.5y
 }
 
+// The real arena is a 25y circle (player p99.9 radius 24.8, boundary hit at 24.6, charge targets at
+// 25), so mark the persistent electric fence with a thin ring at the edge instead of a 20-30 donut.
 sealed class LethalBoundary(BossModule module) : Components.GenericAOEs(module)
 {
-    private static readonly AOEShapeDonut Shape = new(20f, 30f);
+    private static readonly AOEShapeDonut Shape = new(24.5f, 25.5f);
     private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
@@ -137,7 +139,7 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
 
         var outer = status.Extra * 2.5f;
         AOEShape shape = status.Extra == 1 ? new AOEShapeCircle(outer) : new AOEShapeDonut(outer - 2.5f, outer);
-        _pending[actor.InstanceID] = new(shape, actor.Position, activation: WorldState.FutureTime(0.3f),
+        _pending[actor.InstanceID] = new(shape, actor.Position, color: Colors.Danger, activation: WorldState.FutureTime(0.3f),
             actorID: actor.InstanceID, shapeDistance: shape.Distance(actor.Position, default));
     }
 
@@ -168,7 +170,69 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
 // stable, non-duplicated warning and starts one second before the helper cast bars.
 sealed class BlackenedRain(BossModule module) : Components.RaidwideCast(module, (uint)AID.BlackenedRainVisual);
 sealed class DarkDealing(BossModule module) : Components.SingleTargetDelayableCast(module, (uint)AID.DarkDealing);
-sealed class HellwardBound(BossModule module) : Components.ChargeAOEs(module, (uint)AID.HellwardBound, 5f);
+sealed class HellwardBound : Components.ChargeAOEs
+{
+    public HellwardBound(BossModule module) : base(module, (uint)AID.HellwardBound, 5f)
+    {
+        Color = Colors.Danger;
+    }
+}
+
+// The charge cast telegraphs only the first dash. After it resolves the boss dashes repeatedly
+// across the arena (replay: center -> SE corner -> west edge -> back east, each ~0.3s segment),
+// and those later segments carry damage too. Track the boss's fast movement and draw every dash
+// segment as a short-lived danger line so the whole multi-dash sequence is visible.
+sealed class ChargeDashes(BossModule module) : Components.GenericAOEs(module)
+{
+    private const float HalfWidth = 5f;
+    private const float MinDashStep = 0.25f; // ~100y/s at 100Hz replay / ~1.7y per 60Hz frame; walks stay well below
+    private const double DashLifetime = 1.5d;
+    private readonly List<AOEInstance> _segments = [];
+    private readonly List<AOEInstance> _displayed = [with(32)];
+    private WPos _lastPosition;
+    private bool _hasLast;
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
+    {
+        PruneExpired();
+        _displayed.Clear();
+        _displayed.AddRange(_segments);
+        return CollectionsMarshal.AsSpan(_displayed);
+    }
+
+    public override void Update()
+    {
+        var boss = Module.PrimaryActor;
+        if (boss.IsDeadOrDestroyed)
+        {
+            _segments.Clear();
+            _hasLast = false;
+            return;
+        }
+
+        var now = WorldState.CurrentTime;
+        if (_hasLast)
+        {
+            var delta = boss.Position - _lastPosition;
+            if (delta.LengthSq() > MinDashStep * MinDashStep)
+            {
+                var rotation = Angle.FromDirection(delta);
+                var shape = new AOEShapeRect(delta.Length(), HalfWidth);
+                _segments.Add(new(shape, _lastPosition, rotation, now, Colors.Danger, true, boss.InstanceID,
+                    shapeDistance: shape.Distance(_lastPosition, rotation)));
+            }
+        }
+        _lastPosition = boss.Position;
+        _hasLast = true;
+        PruneExpired();
+    }
+
+    private void PruneExpired()
+    {
+        var now = WorldState.CurrentTime;
+        _segments.RemoveAll(entry => now > entry.Activation.AddSeconds(DashLifetime));
+    }
+}
 
 sealed class AcceptNoImitatorsStates : StateMachineBuilder
 {
@@ -180,7 +244,8 @@ sealed class AcceptNoImitatorsStates : StateMachineBuilder
             .ActivateOnEnter<MadeMagic>()
             .ActivateOnEnter<BlackenedRain>()
             .ActivateOnEnter<DarkDealing>()
-            .ActivateOnEnter<HellwardBound>();
+            .ActivateOnEnter<HellwardBound>()
+            .ActivateOnEnter<ChargeDashes>();
     }
 }
 
@@ -196,4 +261,6 @@ sealed class AcceptNoImitatorsStates : StateMachineBuilder
     GroupID = 1093u,
     NameID = 63u,
     SortOrder = 9)]
-public sealed class AcceptNoImitators(WorldState ws, Actor primary) : BossModule(ws, primary, new(500f, -310f), new ArenaBoundsCircle(20f));
+// Replay-verified 25y circular arena (players reach r24.8, the charge ends at r25 and the fence
+// kills at 24.6); the old 20y circle clipped the charge and misplaced the boundary drawing.
+public sealed class AcceptNoImitators(WorldState ws, Actor primary) : BossModule(ws, primary, new(500f, -310f), new ArenaBoundsCircle(25f));

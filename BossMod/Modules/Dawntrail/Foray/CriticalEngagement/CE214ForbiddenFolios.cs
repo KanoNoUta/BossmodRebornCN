@@ -71,23 +71,104 @@ public enum SID : uint
 // marker and is not a damaging circle.
 sealed class BasicAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 {
-    private static readonly AOEShapeCircle Blot = new(15f);
-    private static readonly AOEShapeCone Cover = new(30f, 90f.Degrees());
+    // Replay-verified ink-hit radius is ~9y (p90=9.0, max=9.2), not 15y; the oversized 15y circles
+    // overlapped the 6y gaps and hid the weave path, so the AI could not thread the 3x3 grid.
+    private static readonly AOEShapeCircle Blot = new(9.5f);
     private static readonly AOEShapeCircle BookDrop = new(3f);
     private static readonly AOEShapeCone FireII = new(60f, 22.5f.Degrees());
 
-    // Blot grids expose several waves up front (commonly 3/3/3 at two-second intervals). Keep
-    // later waves as previews, but only the earliest simultaneous group may steer automation.
-    protected override double RiskyActivationWindow => 0.25d;
+    // Blot/book-drop grids expose several waves up front at two-second intervals. With the
+    // corrected 9.5y ink radius the adjacent waves leave real gaps, so planning two seconds ahead
+    // no longer covers the arena and automation can weave through.
+    // Both batches resolve two seconds apart; leaving the second batch risky only 0.25s early gave
+    // automation no time to dodge. The lanes sit at the arena frame, so planning both batches
+    // together still leaves the center safe and does not oscillate.
+    protected override double RiskyActivationWindow => 2.0d;
 
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
         (uint)AID.Blot => new(Blot, true),
-        (uint)AID.CoverToCoverFirst or (uint)AID.CoverToCoverSecond => new(Cover),
+
         (uint)AID.BookDrop => new(BookDrop),
         (uint)AID.FireII => new(FireII),
         _ => null
     };
+}
+
+// Cover to Cover sweeps one half first, then the opposite half roughly four seconds later. The
+// second sweep's own cast is only 0.7s, which automation cannot react to, so publish the second
+// sweep's danger zone from the moment the first sweep resolves (replay: 16 victims in the second
+// sweep because it appeared too late).
+sealed class CoverToCoverSequence(BossModule module) : Components.GenericAOEs(module)
+{
+    private static readonly AOEShapeCone Shape = new(30f, 90f.Degrees());
+    private const double SecondResolveDelay = 4.2d;
+    private readonly List<AOEInstance> _displayed = [with(2)];
+    private AOEInstance? _first;
+    private AOEInstance? _second;
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
+    {
+        PruneExpired();
+        _displayed.Clear();
+        if (_first is { } first)
+            _displayed.Add(first);
+        if (_second is { } second)
+            _displayed.Add(second);
+        return CollectionsMarshal.AsSpan(_displayed);
+    }
+
+    public override void Update() => PruneExpired();
+
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
+    {
+        if (spell.EventHappened)
+            return;
+
+        switch (spell.Action.ID)
+        {
+            case (uint)AID.CoverToCoverFirst:
+                _first = new(Shape, caster.Position, spell.Rotation, Module.CastFinishAt(spell), Colors.Danger, true, caster.InstanceID, Shape.Distance(caster.Position, spell.Rotation));
+                break;
+            case (uint)AID.CoverToCoverSecond:
+                _second = new(Shape, caster.Position, spell.Rotation, Module.CastFinishAt(spell), Colors.Danger, true, caster.InstanceID, Shape.Distance(caster.Position, spell.Rotation));
+                break;
+        }
+    }
+
+    public override void OnCastFinished(Actor caster, ActorCastInfo spell)
+    {
+        var now = WorldState.CurrentTime;
+        switch (spell.Action.ID)
+        {
+            case (uint)AID.CoverToCoverFirst:
+                _first = null;
+                // The first half is now swept; warn about the opposite half until the second sweep lands.
+                var predictedRotation = spell.Rotation + 180f.Degrees();
+                _second = new(Shape, caster.Position, predictedRotation, now.AddSeconds(SecondResolveDelay), Colors.Danger, true, caster.InstanceID, Shape.Distance(caster.Position, predictedRotation));
+                break;
+            case (uint)AID.CoverToCoverSecond:
+                _second = null;
+                break;
+        }
+    }
+
+    public override void OnActorDestroyed(Actor actor)
+    {
+        if (_first is { ActorID: var firstID } && firstID == actor.InstanceID)
+            _first = null;
+        if (_second is { ActorID: var secondID } && secondID == actor.InstanceID)
+            _second = null;
+    }
+
+    private void PruneExpired()
+    {
+        var now = WorldState.CurrentTime;
+        if (_first is { Activation: var firstAct } && now > firstAct.AddSeconds(1d))
+            _first = null;
+        if (_second is { Activation: var secondAct } && now > secondAct.AddSeconds(1d))
+            _second = null;
+    }
 }
 
 // Thunder II arrives in two batches, two seconds apart. Draw both batches for planning while only
@@ -99,6 +180,10 @@ sealed class ThunderII(BossModule module) : ReplayValidatedCastAOEs(module)
     // player hitbox) while non-targets begin at the same boundary. A 5y-wide lane leaves the
     // intended 5y gaps between helpers spaced 10y apart; width 10 falsely tiles the whole arena.
     private static readonly AOEShapeRect Shape = new(50f, 2.5f);
+    // Both batches resolve two seconds apart. Widening the risk window to cover both at once made
+    // the full lane frame leave no safe cell (regression: noSafeFrames), so the second batch must
+    // stay preview until the first resolves; the 0.25s tail is unavoidable without a per-batch
+    // deadline. The "three-through-one" weave the operator reported is the ink grid, not thunder.
     protected override double RiskyActivationWindow => 0.25d;
     protected override DateTime? CompetingActivation => Module.FindComponent<BasicAOEs>()?.EarliestActivation;
     protected override AOEConfig? ConfigFor(uint actionID) => actionID == (uint)AID.ThunderII ? new(Shape) : null;
@@ -298,12 +383,15 @@ sealed class KnowledgeSectors(BossModule module) : Components.GenericAOEs(module
         return 0;
     }
 
+    // Replay-verified: the sectors are named 知见3级核爆 / 知见4级神圣 / 知见5级即死 / 知见质数即死,
+    // and every recorded victim died in a sector whose condition their final knowledge level satisfied.
+    // The sector is therefore SAFE only when the condition does NOT hold.
     private static bool SatisfiesRule(int level, SectorKind kind) => kind switch
     {
-        SectorKind.Level3 => level % 3 == 0,
-        SectorKind.Level4 or SectorKind.Level4Wide => level % 4 == 0,
-        SectorKind.Level5 => level % 5 == 0,
-        SectorKind.Prime or SectorKind.PrimeWide => IsPrime(level),
+        SectorKind.Level3 => level % 3 != 0,
+        SectorKind.Level4 or SectorKind.Level4Wide => level % 4 != 0,
+        SectorKind.Level5 => level % 5 != 0,
+        SectorKind.Prime or SectorKind.PrimeWide => !IsPrime(level),
         _ => false
     };
 
@@ -377,6 +465,7 @@ sealed class ForbiddenFoliosStates : StateMachineBuilder
     {
         TrivialPhase()
             .ActivateOnEnter<BasicAOEs>()
+            .ActivateOnEnter<CoverToCoverSequence>()
             .ActivateOnEnter<ThunderII>()
             .ActivateOnEnter<HorizontalRule>()
             .ActivateOnEnter<KnowledgeSectors>()

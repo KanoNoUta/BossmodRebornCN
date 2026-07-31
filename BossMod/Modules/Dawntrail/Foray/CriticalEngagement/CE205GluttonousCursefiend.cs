@@ -48,9 +48,9 @@ public enum AID : uint
 
 sealed class MiasmaBoundary(BossModule module) : Components.GenericAOEs(module)
 {
-    // The effect starts at 20y, but keeping the forbidden zone one yalm inside the arena prevents
-    // character radius and movement interpolation from clipping the persistent deathwall.
-    private static readonly AOEShapeDonut Shape = new(19f, 30f);
+    // Replay boundary damage lands at ~28.6y and the fire strips reach the same edge, so the real
+    // walkable arena is about 28y, not 20y. Keep a small margin inside the measured wall.
+    private static readonly AOEShapeDonut Shape = new(27.5f, 30f);
     private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
@@ -60,7 +60,10 @@ sealed class MiasmaBoundary(BossModule module) : Components.GenericAOEs(module)
 // the matching cast resolves; ActionEffect packet loss must not make the pre-cast telegraph vanish.
 sealed class AlgolAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 {
-    private static readonly AOEShapeRect Tomato = new(50f, 3f);
+    // The tomato-miasma helper sits at the strip's center: every recorded cast targets a point
+    // exactly 25y forward, and victims are hit just behind the helper too, so the strip is a
+    // symmetric 50y x 6y rect. A front-only rect previously left the near half undrawn.
+    private static readonly AOEShapeRect Tomato = new(25f, 3f, 25f);
     private static readonly AOEShapeCone Onion = new(60f, 15f.Degrees());
     private static readonly AOEShapeRect Cannon = new(40f, 25f);
     private static readonly AOEShapeCircle Corrupt12 = new(12f);
@@ -265,4 +268,6 @@ sealed class GluttonousCursefiendStates : StateMachineBuilder
     GroupID = 1093u,
     NameID = 54u,
     SortOrder = 4)]
-public sealed class GluttonousCursefiend(WorldState ws, Actor primary) : BossModule(ws, primary, new(765f, 0f), new ArenaBoundsCircle(20f));
+// Replay player positions and the 28.6y boundary hits show the arena is 28y, not 20y; the old
+// 20y circle clipped the outer halves of the long fire strips.
+public sealed class GluttonousCursefiend(WorldState ws, Actor primary) : BossModule(ws, primary, new(765f, 0f), new ArenaBoundsCircle(28f));

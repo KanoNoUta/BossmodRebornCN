@@ -102,4 +102,6 @@ sealed class WhatGoesAroundStates : StateMachineBuilder
     GroupID = 1093u,
     NameID = 57u,
     SortOrder = 8)]
-public sealed class WhatGoesAround(WorldState ws, Actor primary) : BossModule(ws, primary, new(224f, -860f), new ArenaBoundsCircle(20f));
+// The electric fence is square: arena-control kills cluster at |z| ~= 24 and players reach the
+// square rim, so use a 24.5y square instead of the old 20y circle that clipped the lane mechanics.
+public sealed class WhatGoesAround(WorldState ws, Actor primary) : BossModule(ws, primary, new(224f, -860f), new ArenaBoundsSquare(24.5f));

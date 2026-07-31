@@ -42,7 +42,7 @@ sealed class DemiMedusaStates : StateMachineBuilder {
     }
 }
 
-[ModuleInfo(BossModuleInfo.Maturity.WIP,
+[ModuleInfo(BossModuleInfo.Maturity.Contributed,
     StatesType = typeof(DemiMedusaStates),
     ConfigType = null, // replace null with typeof(DemiMedusaConfig) if applicable
     ObjectIDType = typeof(OID),

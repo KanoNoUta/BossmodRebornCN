@@ -34,7 +34,7 @@ sealed class SensualSandyStates : StateMachineBuilder {
     }
 }
 
-[ModuleInfo(BossModuleInfo.Maturity.WIP,
+[ModuleInfo(BossModuleInfo.Maturity.Contributed,
     StatesType = typeof(SensualSandyStates),
     ConfigType = null, // replace null with typeof(SensualSandyConfig) if applicable
     ObjectIDType = typeof(OID),

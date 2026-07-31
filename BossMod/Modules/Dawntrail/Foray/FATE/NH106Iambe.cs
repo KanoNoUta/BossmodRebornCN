@@ -102,7 +102,7 @@ sealed class IambeStates : StateMachineBuilder {
     }
 }
 
-[ModuleInfo(BossModuleInfo.Maturity.WIP,
+[ModuleInfo(BossModuleInfo.Maturity.Contributed,
     StatesType = typeof(IambeStates),
     ConfigType = null, // replace null with typeof(IambeConfig) if applicable
     ObjectIDType = typeof(OID),
