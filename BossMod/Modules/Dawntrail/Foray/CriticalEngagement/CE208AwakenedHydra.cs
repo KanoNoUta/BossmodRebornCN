@@ -134,6 +134,10 @@ sealed class HydraAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
     private static readonly AOEShapeCircle Shockwave = new(8f);
     private static readonly AOEShapeCone Breath = new(30f, 60f.Degrees());
 
+    // Spill, shockwave and multi-breath packets expose later waves before the first resolves.
+    // Preserve every preview while only the earliest simultaneous batch constrains movement.
+    protected override double RiskyActivationWindow => 0.25d;
+
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
         >= (uint)AID.ElementalSpill1 and <= (uint)AID.ElementalSpill5 => new(Spill, true),

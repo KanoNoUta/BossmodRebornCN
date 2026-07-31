@@ -45,40 +45,16 @@ sealed class SpinningSweep(BossModule module) : Components.SimpleAOEs(module, (u
 sealed class UnbowedSpirit(BossModule module) : Components.GenericAOEs(module)
 {
     private static readonly AOEShapeCircle Shape = new(4f);
-    private readonly List<Actor>[] _bladeGroups = [module.Enemies((uint)OID.AlabasterBlade)];
-    private readonly HashSet<ulong> _observedBladeIDs = [];
+    private readonly List<Actor> _blades = module.Enemies((uint)OID.AlabasterBlade);
     private readonly List<AOEInstance> _active = [with(8)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
     {
         _active.Clear();
-        foreach (var group in _bladeGroups)
-        {
-            foreach (var blade in group)
-            {
-                AddBlade(blade);
-            }
-        }
-        foreach (var instanceID in _observedBladeIDs)
-        {
-            if (WorldState.Actors.Find(instanceID) is { } blade && !_bladeGroups.Any(group => group.Any(known => known.InstanceID == instanceID)))
-            {
-                AddBlade(blade);
-            }
-        }
+        foreach (var blade in _blades)
+            AddBlade(blade);
         return CollectionsMarshal.AsSpan(_active);
     }
-
-    public override void OnEventCast(Actor caster, ActorCastEvent spell)
-    {
-        if (spell.Action.ID is (uint)AID.UnbowedSpirit or (uint)AID.Gale)
-        {
-            _observedBladeIDs.Add(caster.InstanceID);
-        }
-    }
-
-    public override void OnActorDeath(Actor actor) => _observedBladeIDs.Remove(actor.InstanceID);
-    public override void OnActorDestroyed(Actor actor) => _observedBladeIDs.Remove(actor.InstanceID);
 
     private void AddBlade(Actor blade)
     {
@@ -97,6 +73,7 @@ sealed class UnbowedSpirit(BossModule module) : Components.GenericAOEs(module)
 sealed class BladePatterns(BossModule module) : Components.GenericAOEs(module)
 {
     private const double WaveWindow = 0.5d;
+    private const double ImpactSequenceWindow = 8d;
     private const double EventResolveTolerance = 0.5d;
     private const double TombstoneWindow = 1d;
     private const double ExpireDelay = 2d;
@@ -129,13 +106,32 @@ sealed class BladePatterns(BossModule module) : Components.GenericAOEs(module)
             return [];
         }
 
-        var deadline = _pending[0].AOE.Activation.AddSeconds(WaveWindow);
+        // Impact helpers start one after another over roughly 7.2s. Keep the complete four-circle
+        // sequence visible, but make only the next two circles forbidden so the AI can progress
+        // through it. The time bound prevents a late/stale packet from joining a later sequence.
+        if (_pending[0].ActionID == (uint)AID.InspiritedImpact)
+        {
+            var deadline = _pending[0].AOE.Activation.AddSeconds(ImpactSequenceWindow);
+            var displayed = 0;
+            foreach (var entry in _pending)
+            {
+                if (entry.ActionID != (uint)AID.InspiritedImpact || entry.AOE.Activation > deadline || displayed == 4)
+                    continue;
+
+                var aoe = entry.AOE;
+                aoe.Risky = displayed < 2;
+                aoe.Color = aoe.Risky ? Colors.Danger : Colors.AOE;
+                _displayed.Add(aoe);
+                ++displayed;
+            }
+            return CollectionsMarshal.AsSpan(_displayed);
+        }
+
+        var waveDeadline = _pending[0].AOE.Activation.AddSeconds(WaveWindow);
         foreach (var entry in _pending)
         {
-            if (entry.AOE.Activation > deadline)
-            {
+            if (entry.AOE.Activation > waveDeadline)
                 break;
-            }
 
             var aoe = entry.AOE;
             aoe.Color = Colors.Danger;
@@ -295,7 +291,9 @@ sealed class FamiliarTacticsStates : StateMachineBuilder
     GroupID = 1093u,
     NameID = 58u,
     SortOrder = 0)]
-public sealed class FamiliarTactics(WorldState ws, Actor primary) : BossModule(ws, primary, new(-390f, 700f), new ArenaBoundsCircle(20f))
+// Crosswind recordings place every unharmed player on the outer safe pockets at roughly 28.5y
+// from center. A 20y pathfinding boundary makes those legitimate solutions unreachable.
+public sealed class FamiliarTactics(WorldState ws, Actor primary) : BossModule(ws, primary, new(-390f, 700f), new ArenaBoundsCircle(30f))
 {
     protected override void DrawEnemies(int pcSlot, Actor pc)
     {

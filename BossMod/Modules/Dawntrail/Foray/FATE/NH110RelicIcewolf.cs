@@ -80,7 +80,26 @@ sealed class StormWithinWithout(BossModule module) : Components.GenericAOEs(modu
 
 sealed class IcePillar(BossModule module) : Components.SimpleAOEs(module, (uint)AID.IcePillar, new AOEShapeCircle(4f));
 sealed class Rush(BossModule module) : Components.SimpleAOEs(module, (uint)AID.Rush, new AOEShapeRect(80f, 2f));
-sealed class AgeOfEndlessFrost(BossModule module) : Components.SimpleAOEs(module, (uint)AID.AgeOfEndlessFrost, new AOEShapeCone(40f, 30f.Degrees()));
+sealed class AgeOfEndlessFrost(BossModule module) : Components.SimpleAOEs(module, (uint)AID.AgeOfEndlessFrost, new AOEShapeCone(40f, 30f.Degrees()))
+{
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
+    {
+        Casters.Sort((left, right) => left.Activation.CompareTo(right.Activation));
+        var aoes = CollectionsMarshal.AsSpan(Casters);
+        if (aoes.Length == 0)
+            return aoes;
+
+        // Helpers announce two three-cone waves together. Keep the second wave visible without
+        // combining it with the first into a fake full-circle danger zone.
+        var riskyDeadline = aoes[0].Activation.AddSeconds(0.2d);
+        foreach (ref var aoe in aoes)
+        {
+            aoe.Risky = aoe.Activation <= riskyDeadline;
+            aoe.Color = aoe.Risky ? Colors.Danger : Colors.AOE;
+        }
+        return aoes;
+    }
+}
 sealed class RoaringBlizzard(BossModule module) : Components.SimpleAOEs(module, (uint)AID.RoaringBlizzard, new AOEShapeCone(50f, 30f.Degrees()));
 
 [SkipLocalsInit]

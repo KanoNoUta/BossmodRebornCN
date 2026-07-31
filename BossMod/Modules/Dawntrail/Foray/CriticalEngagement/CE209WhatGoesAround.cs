@@ -42,6 +42,30 @@ sealed class WhatGoesAroundAOEs(BossModule module) : ReplayValidatedCastAOEs(mod
     private static readonly AOEShapeRect Current = new(35f, 6f, 35f);
     private static readonly AOEShapeRect Gloom = new(50f, 25f);
 
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        base.AddAIHints(slot, actor, assignment, hints);
+
+        // Replay has three distinct B84C helpers in every wave. The lines leave safe pockets near
+        // the rim, but forbidden zones alone give the pathfinder no reason to leave a currently
+        // safe central pocket early. Prefer the outer two yalms while the triple-line wave is
+        // visible; the three actual line shapes still decide which part of the rim is safe.
+        var currentVisible = false;
+        foreach (ref readonly var aoe in ActiveAOEs(slot, actor))
+        {
+            if (ReferenceEquals(aoe.Shape, Current))
+            {
+                currentVisible = true;
+                break;
+            }
+        }
+        if (currentVisible)
+        {
+            var center = Arena.Center;
+            hints.GoalZones.Add(position => (position - center).LengthSq() is >= 289f and <= 361f ? 5f : 0f);
+        }
+    }
+
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
         (uint)AID.SpiritExplosionCircle => new(SpiritCircle),

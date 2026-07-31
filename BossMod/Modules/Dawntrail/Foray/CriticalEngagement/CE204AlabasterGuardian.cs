@@ -35,10 +35,16 @@ public enum AID : uint
 
 sealed class AlabasterAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 {
-    private static readonly AOEShapeRect Line = new(50f, 5f);
+    // Replay-verified: the line helpers stand on the arena mid-lines (e.g. x=-519 for a 90-degree
+    // storm row) and the visual crosses the whole arena, so the rect must extend backwards too.
+    private static readonly AOEShapeRect Line = new(50f, 5f, 50f);
     private static readonly AOEShapeCone Homage = new(40f, 45f.Degrees());
     private static readonly AOEShapeCone Stone = new(40f, 30f.Degrees());
     private static readonly AOEShapeCircle Tornado = new(5f);
+
+    // Command patterns queue several waves at once. Every AOE in the first wave is real, but
+    // making the following wave forbidden at the same time erases the actual safe lanes.
+    protected override double RiskyActivationWindow => 0.25d;
 
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {

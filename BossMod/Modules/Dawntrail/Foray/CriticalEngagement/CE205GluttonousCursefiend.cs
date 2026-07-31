@@ -54,6 +54,8 @@ sealed class MiasmaBoundary(BossModule module) : Components.GenericAOEs(module)
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
 }
 
+// These actions all have usable CastStart packets in the replays. Keep the warning active until
+// the matching cast resolves; ActionEffect packet loss must not make the pre-cast telegraph vanish.
 sealed class AlgolAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 {
     private static readonly AOEShapeRect Tomato = new(50f, 3f);
@@ -197,7 +199,8 @@ sealed class AlgolDrawIn(BossModule module) : Components.GenericKnockback(module
                 if (MathF.Abs(step.Deg) is >= 5f and <= 30f)
                     _spinStep = step;
                 _spinLastDirection = spell.Rotation;
-                var predictedDirection = spell.Rotation + _spinStep;
+                var effectiveStep = _spinStep == default ? DefaultSpinStep : _spinStep;
+                var predictedDirection = spell.Rotation + effectiveStep;
                 var activation = WorldState.FutureTime(SpinTickInterval);
                 _spinExpiresAt = WorldState.FutureTime(0.75d);
                 _spinning = new(caster.Position, PullDistance, activation, ShortCone, predictedDirection, Kind.TowardsOrigin, actorID: Module.PrimaryActor.InstanceID);

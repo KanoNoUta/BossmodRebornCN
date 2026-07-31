@@ -92,11 +92,77 @@ sealed class DragonsBreathSequence(BossModule module) : Components.GenericAOEs(m
         => _pending.RemoveAll(entry => entry.AOE.ActorID == actorID);
 }
 
-// The cast packet is authoritative for the first half. 50115/50116 are confirmed follow-up
-// actions, but no recording currently establishes their packet rotation/timing, so do not invent
-// an opposite-side prediction that could send the AI into the real AOE.
-sealed class Duobreath(BossModule module) : Components.SimpleAOEGroups(module,
-    [(uint)AID.LeftDuobreath, (uint)AID.RightDuobreath], new AOEShapeCone(40f, 90f.Degrees()));
+// The first cast covers one half of the arena and the no-cast follow-up covers the opposite half
+// 3.175s later. The full C3BF -> C3C4 sequence is replay-verified: the first packet hit the western
+// group and the follow-up hit the eastern group. C3C0 -> C3C3 is the mirrored action pair. Show
+// both for planning, but only let the currently resolving half steer automation.
+sealed class Duobreath(BossModule module) : Components.GenericAOEs(module)
+{
+    private readonly record struct Pending(uint ActionID, AOEInstance AOE);
+
+    private static readonly AOEShapeCone Shape = new(40f, 90f.Degrees());
+    private static readonly Angle Opposite = 180f.Degrees();
+    private const double FollowupDelay = 3.175d;
+    private readonly List<Pending> _pending = [with(2)];
+    private readonly List<AOEInstance> _displayed = [with(2)];
+    private readonly HashSet<uint> _seenGlobalSequences = [];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
+    {
+        PruneExpired();
+        _displayed.Clear();
+        for (var i = 0; i < _pending.Count; ++i)
+        {
+            var aoe = _pending[i].AOE;
+            aoe.Risky = i == 0;
+            aoe.Color = i == 0 ? Colors.Danger : Colors.AOE;
+            _displayed.Add(aoe);
+        }
+        return CollectionsMarshal.AsSpan(_displayed);
+    }
+
+    public override void Update() => PruneExpired();
+
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
+    {
+        if (spell.Action.ID is not ((uint)AID.LeftDuobreath or (uint)AID.RightDuobreath) || spell.EventHappened)
+            return;
+
+        var firstActivation = Module.CastFinishAt(spell);
+        if (firstActivation <= WorldState.CurrentTime)
+            return;
+
+        var followup = spell.Action.ID == (uint)AID.LeftDuobreath ? AID.DuobreathRamFollowup : AID.DuobreathDragonFollowup;
+        _pending.RemoveAll(entry => entry.AOE.ActorID == caster.InstanceID);
+        Add(spell.Action.ID, caster, spell.Rotation, firstActivation);
+        Add((uint)followup, caster, spell.Rotation + Opposite, firstActivation.AddSeconds(FollowupDelay));
+    }
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
+    {
+        if (spell.Action.ID is not ((uint)AID.LeftDuobreath or (uint)AID.RightDuobreath
+            or (uint)AID.DuobreathDragonFollowup or (uint)AID.DuobreathRamFollowup)
+            || spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence))
+            return;
+
+        _pending.RemoveAll(entry => entry.ActionID == spell.Action.ID && entry.AOE.ActorID == caster.InstanceID);
+        ++NumCasts;
+        PruneExpired();
+    }
+
+    public override void OnActorDeath(Actor actor) => RemoveActor(actor.InstanceID);
+    public override void OnActorDestroyed(Actor actor) => RemoveActor(actor.InstanceID);
+
+    private void Add(uint actionID, Actor caster, Angle rotation, DateTime activation)
+        => _pending.Add(new(actionID, new(Shape, caster.Position, rotation, activation, actorID: caster.InstanceID,
+            shapeDistance: Shape.Distance(caster.Position, rotation))));
+
+    private void PruneExpired()
+        => _pending.RemoveAll(entry => WorldState.CurrentTime > entry.AOE.Activation.AddSeconds(0.75d));
+
+    private void RemoveActor(ulong actorID)
+        => _pending.RemoveAll(entry => entry.AOE.ActorID == actorID);
+}
 sealed class ChaoticChorus(BossModule module) : Components.SimpleAOEs(module, (uint)AID.ChaoticChorus, new AOEShapeCircle(6f));
 sealed class RamsVoice(BossModule module) : Components.SimpleAOEs(module, (uint)AID.RamsVoice, new AOEShapeCircle(9f));
 sealed class DragonsVoice(BossModule module) : Components.SimpleAOEGroups(module,

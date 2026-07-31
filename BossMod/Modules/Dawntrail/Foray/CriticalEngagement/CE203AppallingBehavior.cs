@@ -82,12 +82,16 @@ sealed class AppallingAOEs(BossModule module) : Components.GenericAOEs(module)
     {
         Prune();
         _displayed.Clear();
-        foreach (var pending in _pending.OrderBy(p => p.Activation))
+        var ordered = _pending.OrderBy(p => p.Activation).ToArray();
+        var riskyDeadline = ordered.Length > 0 ? ordered[0].Activation.AddSeconds(0.25d) : DateTime.MinValue;
+        foreach (var pending in ordered)
         {
             var source = pending.FollowCaster ? WorldState.Actors.Find(pending.ActorID) : null;
             var origin = source?.Position ?? pending.Origin;
             var rotation = source?.Rotation ?? pending.Rotation;
-            _displayed.Add(new(pending.Shape, origin, rotation, pending.Activation, actorID: pending.ActorID, shapeDistance: pending.Shape.Distance(origin, rotation)));
+            var imminent = pending.Activation <= riskyDeadline;
+            _displayed.Add(new(pending.Shape, origin, rotation, pending.Activation,
+                imminent ? Colors.Danger : Colors.AOE, imminent, pending.ActorID, pending.Shape.Distance(origin, rotation)));
         }
         return CollectionsMarshal.AsSpan(_displayed);
     }

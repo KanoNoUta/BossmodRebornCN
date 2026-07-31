@@ -37,7 +37,7 @@ public enum AID : uint
     PagePrimeVisual = 0xB8D6, // page->self, visual
     BookDropVisual = 0xB8D7, // boss->self, visual
     BookDrop = 0xB8DA, // book trap->self, 8.0s cast, range 3 circle
-    ThunderII = 0xB8DC, // helper->self, 4.0s cast, range 50 width 10 rect
+    ThunderII = 0xB8DC, // helper->self, 4.0s cast, range 50 width 5 rect
     FireII = 0xB8DD, // helper->self, 5.0s cast, range 60 45-degree cone
     FireIIVisual = 0xB8DE, // boss->self, visual
     MarginaliaHit = 0xB8DF, // helper->players, duplicate raidwide damage
@@ -77,6 +77,10 @@ sealed class BasicAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
     private static readonly AOEShapeCone FireII = new(60f, 22.5f.Degrees());
     private static readonly AOEShapeCircle UnboundInk = new(9f);
 
+    // Blot grids expose several waves up front (commonly 3/3/3 at two-second intervals). Keep
+    // later waves as previews, but only the earliest simultaneous group may steer automation.
+    protected override double RiskyActivationWindow => 0.25d;
+
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
         (uint)AID.Blot => new(Blot, true),
@@ -93,8 +97,12 @@ sealed class BasicAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 // forbidden and oscillates. Each helper's origin and rotation are the actual lane geometry.
 sealed class ThunderII(BossModule module) : ReplayValidatedCastAOEs(module)
 {
-    private static readonly AOEShapeRect Shape = new(50f, 5f);
+    // Hit reconstruction puts every confirmed target within 2.74y of the lane center (including
+    // player hitbox) while non-targets begin at the same boundary. A 5y-wide lane leaves the
+    // intended 5y gaps between helpers spaced 10y apart; width 10 falsely tiles the whole arena.
+    private static readonly AOEShapeRect Shape = new(50f, 2.5f);
     protected override double RiskyActivationWindow => 0.25d;
+    protected override DateTime? CompetingActivation => Module.FindComponent<BasicAOEs>()?.EarliestActivation;
     protected override AOEConfig? ConfigFor(uint actionID) => actionID == (uint)AID.ThunderII ? new(Shape) : null;
 }
 

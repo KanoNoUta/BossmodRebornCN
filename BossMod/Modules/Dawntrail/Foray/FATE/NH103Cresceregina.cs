@@ -35,6 +35,8 @@ sealed class NobleBlaster(BossModule module) : Components.SimpleAOEs(module, (ui
 sealed class ThunderboltPuddle(BossModule module) : Components.GenericAOEs(module) {
     private static readonly AOEShapeCircle Shape = new(10f);
     private readonly List<AOEInstance> _aoes = [];
+    private readonly List<AOEInstance> _displayed = [with(3)];
+    private readonly HashSet<uint> _seenGlobalSequences = [];
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
         switch ((AID)spell.Action.ID) {
@@ -47,7 +49,9 @@ sealed class ThunderboltPuddle(BossModule module) : Components.GenericAOEs(modul
             case AID.ThunderboltPuddle6:
             case AID.ThunderboltPuddle7:
             case AID.ThunderboltPuddle8:
-                _aoes.Add(new(Shape, spell.LocXZ, activation: Module.CastFinishAt(spell)));
+                if (!_aoes.Any(aoe => aoe.ActorID == caster.InstanceID))
+                    _aoes.Add(new(Shape, spell.LocXZ, activation: Module.CastFinishAt(spell), actorID: caster.InstanceID,
+                        shapeDistance: Shape.Distance(spell.LocXZ, default)));
                 break;
         }
     }
@@ -63,28 +67,29 @@ sealed class ThunderboltPuddle(BossModule module) : Components.GenericAOEs(modul
             case AID.ThunderboltPuddle6:
             case AID.ThunderboltPuddle7:
             case AID.ThunderboltPuddle8:
-                if (_aoes.Count > 0) {
-                    _aoes.RemoveAll(a => a.Origin.AlmostEqual(caster.Position, 0.5f));
-                }
+                if (spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence))
+                    break;
+                ++NumCasts;
+                _aoes.RemoveAll(aoe => aoe.ActorID == caster.InstanceID);
                 break;
         }
     }
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) {
-        int show = 0;
-
+        _displayed.Clear();
         _aoes.Sort((a, b) => a.Activation.CompareTo(b.Activation));
-        foreach (ref var aoe in CollectionsMarshal.AsSpan(_aoes)) {
-            if (show == 3) {
-                break;
-            }
+        if (_aoes.Count == 0)
+            return CollectionsMarshal.AsSpan(_displayed);
 
-            aoe.Color = Colors.Danger;
-            aoe.Risky = true;
-            show++;
+        var riskyDeadline = _aoes[0].Activation.AddSeconds(0.2d);
+        var count = Math.Min(_aoes.Count, 3);
+        for (var i = 0; i < count; ++i) {
+            var aoe = _aoes[i];
+            aoe.Risky = aoe.Activation <= riskyDeadline;
+            aoe.Color = aoe.Risky ? Colors.Danger : Colors.AOE;
+            _displayed.Add(aoe);
         }
-
-        return CollectionsMarshal.AsSpan(_aoes);
+        return CollectionsMarshal.AsSpan(_displayed);
     }
 }
 

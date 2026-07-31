@@ -28,6 +28,18 @@ abstract class ReplayValidatedCastAOEs(BossModule module) : Components.GenericAO
     protected virtual int MaxDisplayed => int.MaxValue;
     protected virtual int MaxRisky => int.MaxValue;
     protected virtual double RiskyActivationWindow => double.PositiveInfinity;
+    // Some mechanics split one timeline across several components. Let a component contribute an
+    // earlier activation so later previews stay visible without becoming forbidden too soon.
+    protected virtual DateTime? CompetingActivation => null;
+
+    public DateTime? EarliestActivation
+    {
+        get
+        {
+            PruneExpired();
+            return _pending.Count > 0 ? _pending[0].AOE.Activation : null;
+        }
+    }
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
     {
@@ -35,8 +47,11 @@ abstract class ReplayValidatedCastAOEs(BossModule module) : Components.GenericAO
         _displayed.Clear();
         var count = Math.Min(_pending.Count, MaxDisplayed);
         var useRiskLimit = MaxRisky != int.MaxValue || !double.IsPositiveInfinity(RiskyActivationWindow);
-        var riskyDeadline = !double.IsPositiveInfinity(RiskyActivationWindow) && count > 0
-            ? _pending[0].AOE.Activation.AddSeconds(RiskyActivationWindow)
+        var riskReference = count > 0 ? _pending[0].AOE.Activation : DateTime.MaxValue;
+        if (count > 0 && CompetingActivation is { } competing && competing < riskReference)
+            riskReference = competing;
+        var riskyDeadline = count > 0 && !double.IsPositiveInfinity(RiskyActivationWindow)
+            ? riskReference.AddSeconds(RiskyActivationWindow)
             : DateTime.MaxValue;
         for (var i = 0; i < count; ++i)
         {

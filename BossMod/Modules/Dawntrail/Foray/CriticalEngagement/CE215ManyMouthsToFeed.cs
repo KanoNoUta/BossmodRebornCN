@@ -1,0 +1,112 @@
+using BossMod.Dawntrail.Foray.CriticalEngagement;
+
+namespace BossMod.Dawntrail.Foray.CriticalEngagement.CE215ManyMouthsToFeed;
+
+public enum OID : uint
+{
+    Boss = 0x4BCA, // R7.0, BNpcName 14747, 提蔛 (Many Mouths to Feed)
+    BossClone = 0x4BCC, // R0.5, BNpcName 14747, spits venom during flood phase
+    VenomPuddle = 0x4BCD, // R2.0, BNpcName 108, persistent venom voidzone
+    Helper = 0x233C
+}
+
+public enum AID : uint
+{
+    AutoAttack = 0xC6A2, // boss->player, no cast, single-target
+
+    CentralWhipVisual = 0xB872, // boss->self, 4.7s cast, visual for CentralWhip
+    SideWhipVisual = 0xB873, // boss->self, 4.7s cast, visual for SideWhip
+    CentralWhip = 0xB874, // helper, 5.7s cast, 中央鞭打, through-body line (52y long, 10y wide)
+    SideWhip = 0xB875, // helper, 5.7s cast, 侧方鞭打, one 135-degree cone (26y)
+    SideWhip2 = 0xC241, // helper, 5.7s cast, 侧方鞭打, opposite 135-degree cone (26y)
+
+    PollenScatter = 0xB876, // boss->self, 3.7s cast, 花粉飞散, visual precursor for Predation
+    Predation = 0xB877, // boss, 6.7s cast, 捕食, 10y circle
+    PoisonMistVisualA = 0xB87A, // boss->self, 4.7s cast, visual for PoisonMist
+    PoisonMistVisualB = 0xB87B, // boss->self, 4.7s cast, visual for PoisonMist
+    PoisonMist = 0xB87C, // helper, 5.7s cast, 毒雾喷射, 90-degree cone (30y)
+    PoisonMist2 = 0xC573, // helper, 5.7s cast, 毒雾喷射, 90-degree cone (30y)
+    PoisonMist3 = 0xC574, // helper, 5.7s cast, 毒雾喷射, 90-degree cone (30y)
+    PoisonMist4 = 0xC575, // helper, 5.7s cast, 毒雾喷射, 90-degree cone (30y)
+
+    VenomBlobVisual = 0xB87D, // boss->self, 3.7s cast, visual for VenomBlob
+    VenomBlob = 0xB87E, // helper, 2.7s cast, 毒液块, 5y circle scattered puddles
+
+    SecreteVenom = 0xC242, // boss->self, 2.7s cast, 分泌毒液, visual precursor for Venom
+    Venom = 0xB870, // helper, 4.8s cast, 毒液, 2y circle (initial cardinal puddles)
+    VenomSpread = 0xB871, // four fixed helpers, no cast, staggered spreading poison (geometry not safely established)
+
+    PoisonRainVisual = 0xB87F, // boss->self, 4.7s cast, 毒雨, raidwide visual
+    PoisonRain = 0xB880, // helper, no cast, 毒雨, raidwide damage
+
+    SpitVenom = 0xB86E, // clone (0x4BCC), no cast, 分泌毒液, low-priority spit visual
+    SecreteVenomVisualA = 0xB86F, // boss->self, no cast, 分泌毒液 visual
+    SecreteVenomVisualB = 0xC2DD // boss->self, no cast, 分泌毒液 visual
+}
+
+// Cast rotations are replay-verified: each helper cast already carries the packet rotation pointing
+// at its own slice, so we register every slice as an independent AOE off the caster position.
+sealed class ManyMouthsAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
+{
+    // 52y long / 10y wide line, centered on the caster (extends front and back).
+    private static readonly AOEShapeRect CentralLine = new(26f, 5f, 26f);
+    // Side whip is a pair of opposing 135-degree cones; the safe gap is the narrow front/back sliver.
+    private static readonly AOEShapeCone Whip = new(26f, 67.5f.Degrees());
+    // Poison mist fills 3 of the 4 quadrants with 90-degree cones (45-degree half-angle).
+    private static readonly AOEShapeCone Mist = new(30f, 45f.Degrees());
+    private static readonly AOEShapeCircle Predation = new(10f);
+    private static readonly AOEShapeCircle Blob = new(5f);
+    private static readonly AOEShapeCircle VenomCircle = new(2f);
+
+    protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
+    {
+        (uint)AID.CentralWhip => new(CentralLine),
+        (uint)AID.SideWhip or (uint)AID.SideWhip2 => new(Whip),
+        (uint)AID.PoisonMist or (uint)AID.PoisonMist2 or (uint)AID.PoisonMist3 or (uint)AID.PoisonMist4 => new(Mist),
+        (uint)AID.Predation => new(Predation),
+        (uint)AID.VenomBlob => new(Blob),
+        (uint)AID.Venom => new(VenomCircle),
+        _ => null
+    };
+}
+
+// Persistent venom puddles (0x4BCD) are initially created at (0, 0), then moved to their real
+// cardinal positions. Ignore the uninitialized spawn coordinates so they cannot create a bogus
+// off-arena forbidden zone. These live actors are the later persistent puddles near the arena rim;
+// they are separate from the four fixed helpers used by VenomSpread.
+sealed class VenomPuddles(BossModule module) : Components.Voidzone(module, 2f,
+    static module => module.Enemies((uint)OID.VenomPuddle).Where(actor => !actor.IsDeadOrDestroyed && actor.Position.InCircle(module.Arena.Center, 30f)));
+
+sealed class PoisonRain(BossModule module) : Components.RaidwideCasts(module, [(uint)AID.PoisonRainVisual]);
+
+sealed class ManyMouthsToFeedStates : StateMachineBuilder
+{
+    public ManyMouthsToFeedStates(BossModule module) : base(module)
+    {
+        TrivialPhase()
+            .ActivateOnEnter<ManyMouthsAOEs>()
+            .ActivateOnEnter<VenomPuddles>()
+            .ActivateOnEnter<PoisonRain>();
+    }
+}
+
+[ModuleInfo(BossModuleInfo.Maturity.Contributed,
+    StatesType = typeof(ManyMouthsToFeedStates),
+    ObjectIDType = typeof(OID),
+    ActionIDType = typeof(AID),
+    PrimaryActorOID = (uint)OID.Boss,
+    Contributors = "KanoNoUta",
+    Expansion = BossModuleInfo.Expansion.Dawntrail,
+    Category = BossModuleInfo.Category.Foray,
+    GroupType = BossModuleInfo.GroupType.CriticalEngagement,
+    GroupID = 1093u,
+    NameID = 49u,
+    SortOrder = 14)]
+public sealed class ManyMouthsToFeed(WorldState ws, Actor primary) : BossModule(ws, primary, new(-870f, -560f), new ArenaBoundsCircle(20f))
+{
+    protected override void DrawEnemies(int pcSlot, Actor pc)
+    {
+        Arena.Actor(PrimaryActor);
+        Arena.Actors(Enemies((uint)OID.BossClone));
+    }
+}

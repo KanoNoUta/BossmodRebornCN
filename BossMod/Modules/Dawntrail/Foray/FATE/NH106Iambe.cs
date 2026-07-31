@@ -31,41 +31,64 @@ sealed class OdeOfTheUnderfoot(BossModule module) : Components.SimpleAOEs(module
 sealed class IambicMarch(BossModule module) : Components.StatusDrivenForcedMarch(module, 3.0f, (uint)SID.ForwardMarch, (uint)SID.AboutFace, (uint)default,
     (uint)default, (uint)SID.ForcedMarch);
 
+// Gardeners' Hymn identifies the four seeds that will explode about 3.5s after its cast resolves.
+// Keep that long advance warning, then replace its estimated activation with the authoritative
+// Burst cast finish when the selected seed starts its own cast.
 sealed class Burst(BossModule module) : Components.GenericAOEs(module) {
-    private List<AOEInstance> aoes = [];
-    private List<Actor> seeds = new ();
+    private static readonly AOEShapeCircle Shape = new(15f);
+    private readonly List<AOEInstance> _aoes = [];
+    private readonly List<Actor> _seeds = [];
+    private readonly HashSet<uint> _seenGlobalSequences = [];
 
     public override void OnActorCreated(Actor actor) {
         if (actor.OID == (uint)OID.WinsomeSeed) {
-            seeds.Add(actor);
+            _seeds.Add(actor);
         }
     }
 
     public override void OnActorDestroyed(Actor actor) {
         if (actor.OID == (uint)OID.WinsomeSeed) {
-            seeds.Remove(actor);
+            _seeds.Remove(actor);
+            _aoes.RemoveAll(aoe => aoe.ActorID == actor.InstanceID);
         }
     }
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
+        if (spell.EventHappened)
+            return;
+
         if (spell.Action.ID == (uint)AID.GardenersHymn) {
-            foreach (var seed in seeds) {
+            var activation = Module.CastFinishAt(spell).AddSeconds(3.5d);
+            foreach (var seed in _seeds) {
                 if (caster.Position.AlmostEqual(seed.Position, 0.5f)) {
-                    aoes.Add(new(new AOEShapeCircle(15.0f),seed.Position));
+                    _aoes.RemoveAll(aoe => aoe.ActorID == seed.InstanceID);
+                    _aoes.Add(new(Shape, seed.Position, activation: activation, actorID: seed.InstanceID,
+                        shapeDistance: Shape.Distance(seed.Position, default)));
                 }
             }
         }
+        else if (spell.Action.ID == (uint)AID.Burst) {
+            var activation = Module.CastFinishAt(spell);
+            _aoes.RemoveAll(aoe => aoe.ActorID == caster.InstanceID || aoe.Origin.AlmostEqual(caster.Position, 0.5f));
+            _aoes.Add(new(Shape, caster.Position, activation: activation, actorID: caster.InstanceID,
+                shapeDistance: Shape.Distance(caster.Position, default)));
+        }
+
+        _aoes.Sort((left, right) => left.Activation.CompareTo(right.Activation));
     }
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell) {
-        if (spell.Action.ID == (uint)AID.Burst) {
-            if (aoes.Count > 0) {
-                aoes.RemoveAll(a => a.Origin.AlmostEqual(caster.Position, 0.5f));
-            }
-        }
+        if (spell.Action.ID != (uint)AID.Burst
+            || spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence))
+            return;
+
+        _aoes.RemoveAll(aoe => aoe.ActorID == caster.InstanceID || aoe.Origin.AlmostEqual(caster.Position, 0.5f));
+        ++NumCasts;
     }
 
-    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => CollectionsMarshal.AsSpan(aoes);
+    public override void OnActorDeath(Actor actor) => _aoes.RemoveAll(aoe => aoe.ActorID == actor.InstanceID);
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => CollectionsMarshal.AsSpan(_aoes);
 }
 
 [SkipLocalsInit]

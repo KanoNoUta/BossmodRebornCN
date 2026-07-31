@@ -97,6 +97,12 @@ sealed class MovingNecrohaze(BossModule module) : Components.GenericAOEs(module)
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell)
     {
+        if (spell.Action.ID == (uint)AID.AetherialWardDeactivate)
+        {
+            _active.Clear();
+            return;
+        }
+
         if (spell.Action.ID is not ((uint)AID.NecrohazeSweep) and not ((uint)AID.NecrohazeCenter)
             || spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence))
         {

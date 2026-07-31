@@ -54,6 +54,11 @@ public enum AID : uint
     UnknownLocation = 0xC620
 }
 
+public enum SID : uint
+{
+    AreaOfInfluenceUp = 1909 // Made Magic helper, extra 1-7; circle radius = extra * 2.5y
+}
+
 sealed class LethalBoundary(BossModule module) : Components.GenericAOEs(module)
 {
     private static readonly AOEShapeDonut Shape = new(20f, 30f);
@@ -77,6 +82,10 @@ sealed class MorphingMageAOEs(BossModule module) : ReplayValidatedCastAOEs(modul
     private static readonly AOEShapeDonut SupercellOuter = new(16f, 30f);
     private static readonly AOEShapeCross CycloneCross = new(60f, 8f);
 
+    // Several patterns expose the full sequence at once (notably the 2/4/6s breath cones).
+    // Keep simultaneous casts dangerous, but later preview steps must not block AI movement yet.
+    protected override double RiskyActivationWindow => 0.5d;
+
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
         (uint)AID.TongueOfFlame => new(Tongue),
@@ -93,6 +102,58 @@ sealed class MorphingMageAOEs(BossModule module) : ReplayValidatedCastAOEs(modul
     };
 }
 
+// Made Magic creates four fixed helpers 7.8y from center. They pulse every ~0.6s while status
+// 1909 grows from extra 1 through 7. The pulse is an expanding wave: actors already crossed by
+// an earlier pulse can stand inside the current radius without being hit again. Treating it as a
+// filled circle makes extra 7 falsely cover the entire arena, so only the next 2.5y ring is risky.
+sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
+{
+    private readonly Dictionary<ulong, AOEInstance> _pending = [];
+    private readonly List<AOEInstance> _displayed = new(4);
+    private readonly HashSet<uint> _seenGlobalSequences = [];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
+    {
+        _displayed.Clear();
+        _displayed.AddRange(_pending.Values);
+        return CollectionsMarshal.AsSpan(_displayed);
+    }
+
+    public override void OnStatusGain(Actor actor, ref ActorStatus status)
+    {
+        if (actor.OID != (uint)OID.Helper || !actor.Position.InCircle(Arena.Center, 30f)
+            || status.ID != (uint)SID.AreaOfInfluenceUp || status.Extra is < 1 or > 7)
+            return;
+
+        var outer = status.Extra * 2.5f;
+        AOEShape shape = status.Extra == 1 ? new AOEShapeCircle(outer) : new AOEShapeDonut(outer - 2.5f, outer);
+        _pending[actor.InstanceID] = new(shape, actor.Position, activation: WorldState.FutureTime(0.3f),
+            actorID: actor.InstanceID, shapeDistance: shape.Distance(actor.Position, default));
+    }
+
+    public override void OnStatusLose(Actor actor, ref ActorStatus status)
+    {
+        if (status.ID == (uint)SID.AreaOfInfluenceUp)
+            _pending.Remove(actor.InstanceID);
+    }
+
+    public override void OnActorDeath(Actor actor) => _pending.Remove(actor.InstanceID);
+    public override void OnActorDestroyed(Actor actor) => _pending.Remove(actor.InstanceID);
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
+    {
+        if (spell.Action.ID != (uint)AID.MadeMagic
+            || spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence)
+            || !_pending.TryGetValue(caster.InstanceID, out var current))
+            return;
+
+        // Every status step normally pulses twice (extra 7 pulses three times). The first event is
+        // therefore not the end of the ring; move the same warning to the next observed cadence.
+        // A new status replaces its geometry, and status loss performs the final cleanup.
+        _pending[caster.InstanceID] = current with { Activation = WorldState.FutureTime(0.58d) };
+    }
+}
+
 // The three BCD0 helpers split one raidwide across the participant list. The boss cast is the
 // stable, non-duplicated warning and starts one second before the helper cast bars.
 sealed class BlackenedRain(BossModule module) : Components.RaidwideCast(module, (uint)AID.BlackenedRainVisual);
@@ -106,6 +167,7 @@ sealed class AcceptNoImitatorsStates : StateMachineBuilder
         TrivialPhase()
             .ActivateOnEnter<LethalBoundary>()
             .ActivateOnEnter<MorphingMageAOEs>()
+            .ActivateOnEnter<MadeMagic>()
             .ActivateOnEnter<BlackenedRain>()
             .ActivateOnEnter<DarkDealing>()
             .ActivateOnEnter<HellwardBound>();

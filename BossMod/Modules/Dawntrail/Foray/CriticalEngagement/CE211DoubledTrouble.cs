@@ -78,6 +78,27 @@ sealed class DualCuts(BossModule module) : ReplayValidatedCastAOEs(module)
 
     protected override int MaxRisky => 1;
 
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        base.AddAIHints(slot, actor, assignment, hints);
+        var cuts = ActiveAOEs(slot, actor);
+        if (cuts.Length < 2)
+            return;
+
+        // C603 and C604 are exactly opposite and resolve two seconds apart. Staying deep in the
+        // first safe half makes the return crossing too long, which is why automation sometimes
+        // failed the second cut even though its AOE was tracked. Stage one close to the dividing
+        // line (still on the safe side); after C603 resolves, C604's forbidden half moves the AI
+        // only a few yalms across that line instead of across the arena.
+        var origin = cuts[0].Origin;
+        var direction = cuts[0].Rotation.ToDirection();
+        hints.GoalZones.Add(position =>
+        {
+            var forward = (position - origin).Dot(direction);
+            return forward is >= -3f and <= -1f ? 0.75f : 0f;
+        });
+    }
+
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
         (uint)AID.DualCutFirst or (uint)AID.DualCutSecond => new(DualCut),
