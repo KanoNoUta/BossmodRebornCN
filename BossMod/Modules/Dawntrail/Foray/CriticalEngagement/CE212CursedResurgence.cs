@@ -72,11 +72,12 @@ sealed class ZombieGas(BossModule module) : Components.Voidzone(module, 5f,
 // and use its live position, rather than freezing hundreds of already-resolved event circles.
 sealed class MovingNecrohaze(BossModule module) : Components.GenericAOEs(module)
 {
-    private static readonly AOEShapeCircle Shape = new(5f);
-    private const double PulseLifetime = 0.8d;
+    private readonly record struct EventKey(uint Sequence, uint ActionID, ulong ActorID);
+    private static readonly AOEShapeCircle Shape = new(5.5f);
+    private const double PulseLifetime = 0.9d;
     private readonly Dictionary<ulong, DateTime> _active = [];
     private readonly List<AOEInstance> _displayed = [with(8)];
-    private readonly HashSet<uint> _seenGlobalSequences = [];
+    private readonly HashSet<EventKey> _seenEvents = [];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
     {
@@ -104,7 +105,7 @@ sealed class MovingNecrohaze(BossModule module) : Components.GenericAOEs(module)
         }
 
         if (spell.Action.ID is not ((uint)AID.NecrohazeSweep) and not ((uint)AID.NecrohazeCenter)
-            || spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence))
+            || spell.GlobalSequence != 0 && !_seenEvents.Add(new(spell.GlobalSequence, spell.Action.ID, caster.InstanceID)))
         {
             return;
         }

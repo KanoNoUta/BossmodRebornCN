@@ -143,12 +143,14 @@ sealed class AppallingAOEs(BossModule module) : Components.GenericAOEs(module)
 // cells from the live actors and clear the whole snapshot atomically after all five sequences.
 sealed class DeathRouletteGrid(BossModule module) : Components.GenericAOEs(module)
 {
-    private static readonly AOEShapeCircle CenterCell = new(5f);
+    // Keep a small movement margin around the replay-verified action geometry. Roulette resolves
+    // as five almost consecutive effects, so aiming exactly at a cell edge is not reliable for AI.
+    private static readonly AOEShapeCircle CenterCell = new(5.5f);
     // Replay hit coordinates put inner-ring victims as far as 56.1 degrees from the helper's
     // facing. The action sectors are therefore 120/90 degrees wide (the shape API takes a
     // half-angle), rather than the accidentally halved 60/45-degree display used previously.
-    private static readonly AOEShapeDonutSector InnerCell = new(5f, 12f, 60f.Degrees());
-    private static readonly AOEShapeDonutSector OuterCell = new(12f, 20f, 45f.Degrees());
+    private static readonly AOEShapeDonutSector InnerCell = new(4.5f, 12.5f, 62f.Degrees());
+    private static readonly AOEShapeDonutSector OuterCell = new(11.5f, 20.5f, 47f.Degrees());
     private readonly List<AOEInstance> _displayed = [];
     private readonly HashSet<uint> _seenSequences = [];
     private DateTime _activation;
@@ -192,7 +194,7 @@ sealed class DeathRouletteGrid(BossModule module) : Components.GenericAOEs(modul
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
         if (spell.Action.ID == (uint)AID.Roulette && !spell.EventHappened)
-            Arm(Module.CastFinishAt(spell, 14.4f));
+            Arm(Module.CastFinishAt(spell, 14.68f));
     }
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell)
@@ -200,7 +202,7 @@ sealed class DeathRouletteGrid(BossModule module) : Components.GenericAOEs(modul
         if (spell.Action.ID == (uint)AID.Roulette)
         {
             if (!_armed)
-                Arm(WorldState.FutureTime(14.4d));
+                Arm(WorldState.FutureTime(14.68d));
             return;
         }
 

@@ -48,7 +48,9 @@ public enum AID : uint
 
 sealed class MiasmaBoundary(BossModule module) : Components.GenericAOEs(module)
 {
-    private static readonly AOEShapeDonut Shape = new(20f, 30f);
+    // The effect starts at 20y, but keeping the forbidden zone one yalm inside the arena prevents
+    // character radius and movement interpolation from clipping the persistent deathwall.
+    private static readonly AOEShapeDonut Shape = new(19f, 30f);
     private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;

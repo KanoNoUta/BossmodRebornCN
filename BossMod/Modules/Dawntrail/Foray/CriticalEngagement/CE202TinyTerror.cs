@@ -1,4 +1,4 @@
-﻿namespace BossMod.Dawntrail.Foray.CriticalEngagement.CE202TinyTerror;
+namespace BossMod.Dawntrail.Foray.CriticalEngagement.CE202TinyTerror;
 
 public enum OID : uint {
     TinyMage = 0x4C6D,
@@ -239,6 +239,10 @@ sealed class Comet(BossModule module) : BossComponent(module) {
 static class TinyMageMechanic {
     private const float DirectionThreshold = 0.05f;
 
+    // Replay-verified: the growing orb resolves 15.4-15.6s after it spawns (27.0->42.5,
+    // 174.2->189.6, 241.6->256.8), so both growable components share this delay.
+    public const double GrowResolveDelay = 15.5d;
+
     public static void AddMage(List<Actor> mages, Actor actor, WPos center) {
         if (mages.Any(mage => mage.InstanceID == actor.InstanceID)) {
             return;
@@ -284,10 +288,12 @@ static class TinyMageMechanic {
 }
 
 sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
+    private static readonly AOEShapeCircle Shape = new(18.0f);
     private readonly List<Actor> mages = [];
     private Actor? orb;
     private WPos? start;
     private ulong startActorID;
+    private DateTime activation;
     private float previousAngle;
     private float angularTravel;
     private int direction;
@@ -305,6 +311,7 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
             orb = actor;
             start = actor.Position;
             startActorID = actor.InstanceID;
+            activation = WorldState.FutureTime(TinyMageMechanic.GrowResolveDelay);
             previousAngle = TinyMageMechanic.AngleFromNorth(actor.Position, Arena.Center);
             angularTravel = default;
             direction = default;
@@ -342,7 +349,7 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
         }
 
         var targetActor = mages[(startAOE + mages.Count - direction) % mages.Count];
-        return new AOEInstance[1] { new(new AOEShapeCircle(18.0f), targetActor.Position) };
+        return new AOEInstance[1] { new(Shape, targetActor.Position, activation: activation) };
     }
 
     private void RemoveActor(Actor actor) {
@@ -356,6 +363,7 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
         orb = null;
         start = null;
         startActorID = default;
+        activation = default;
         previousAngle = default;
         angularTravel = default;
         direction = default;
@@ -372,6 +380,7 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
     private Actor? orb;
     private WPos? start;
     private ulong startActorID;
+    private DateTime activation;
     private float previousAngle;
     private float angularTravel;
     private int direction;
@@ -389,6 +398,7 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
             orb = actor;
             start = actor.Position;
             startActorID = actor.InstanceID;
+            activation = WorldState.FutureTime(TinyMageMechanic.GrowResolveDelay);
             previousAngle = TinyMageMechanic.AngleFromNorth(actor.Position, Arena.Center);
             angularTravel = default;
             direction = default;
@@ -426,7 +436,7 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
         }
 
         var targetActor = mages[(startAOE + mages.Count - direction) % mages.Count];
-        return new Knockback[1] { new(targetActor.Position, 15.0f) };
+        return new Knockback[1] { new(targetActor.Position, 15.0f, activation) };
     }
 
     private void RemoveActor(Actor actor) {
@@ -440,6 +450,7 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
         orb = null;
         start = null;
         startActorID = default;
+        activation = default;
         previousAngle = default;
         angularTravel = default;
         direction = default;
@@ -452,10 +463,11 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
 }
 
 static class OrbPairMechanic {
-    // Replay timing is not available yet. Both orbs travel half of their separation and the
-    // resolving helper cast is 2s; keep the fallback speed isolated here for later calibration.
-    private const float FallbackOrbSpeed = 6.0f;
-    private const double ResolveCastTime = 2.0d;
+    // Replay-verified (two full waves): the first pair pops 10s after the orbs spawn/tether and
+    // the remaining pairs follow in tether order every 3s; the 1.7s resolve cast then refines
+    // the final activation via UpdateActivation.
+    private const double FirstResolveDelay = 10.0d;
+    private const double ResolveStagger = 3.0d;
 
     public readonly record struct Key(ulong First, ulong Second);
 
@@ -463,8 +475,8 @@ static class OrbPairMechanic {
         return first < second ? new(first, second) : new(second, first);
     }
 
-    public static DateTime EstimateActivation(WorldState worldState, float separation) {
-        return worldState.FutureTime(ResolveCastTime + separation * 0.5f / FallbackOrbSpeed);
+    public static DateTime EstimateActivation(WorldState worldState, int orderIndex) {
+        return worldState.FutureTime(FirstResolveDelay + ResolveStagger * orderIndex);
     }
 }
 
@@ -535,7 +547,7 @@ sealed class OrbPairTimeline(BossModule module) : BossComponent(module) {
         }
 
         var distance = (target.Position - source.Position).Length();
-        entries.Add(new(key, kind.Value, WPos.Lerp(source.Position, target.Position, 0.5f), distance, OrbPairMechanic.EstimateActivation(WorldState, distance)));
+        entries.Add(new(key, kind.Value, WPos.Lerp(source.Position, target.Position, 0.5f), distance, OrbPairMechanic.EstimateActivation(WorldState, entries.Count)));
     }
 
     public override void OnActorDeath(Actor actor) => RemoveActor(actor.InstanceID);

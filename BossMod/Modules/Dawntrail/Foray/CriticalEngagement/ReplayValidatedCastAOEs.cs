@@ -8,7 +8,9 @@ abstract class ReplayValidatedCastAOEs(BossModule module) : Components.GenericAO
     protected readonly record struct AOEConfig(AOEShape Shape, bool LocationTargeted = false);
 
     private const double EventResolveTolerance = 0.5d;
+    private const double CastMatchTolerance = 0.75d;
     private const double TombstoneWindow = 1d;
+    private const double EventDedupWindow = 2d;
     private const double ExpireDelay = 2d;
 
     private sealed class PendingAOE(uint actionID, AOEInstance aoe)
@@ -18,11 +20,12 @@ abstract class ReplayValidatedCastAOEs(BossModule module) : Components.GenericAO
     }
 
     private readonly record struct ResolvedCast(uint ActionID, ulong ActorID, DateTime Activation, DateTime ExpiresAt);
+    private readonly record struct EventKey(uint GlobalSequence, uint ActionID, ulong ActorID);
 
     private readonly List<PendingAOE> _pending = [with(16)];
     private readonly List<AOEInstance> _displayed = [with(16)];
     private readonly List<ResolvedCast> _resolved = [with(16)];
-    private readonly HashSet<uint> _seenGlobalSequences = [];
+    private readonly Dictionary<EventKey, DateTime> _seenEvents = [];
 
     protected abstract AOEConfig? ConfigFor(uint actionID);
     protected virtual int MaxDisplayed => int.MaxValue;
@@ -96,7 +99,7 @@ abstract class ReplayValidatedCastAOEs(BossModule module) : Components.GenericAO
 
         var now = WorldState.CurrentTime;
         var activation = Module.CastFinishAt(spell);
-        RemoveAll(spell.Action.ID, caster.InstanceID);
+        RemoveMatchingCast(spell.Action.ID, caster.InstanceID, activation);
         if (spell.EventHappened || activation <= now.AddSeconds(EventResolveTolerance))
         {
             RememberResolved(spell.Action.ID, caster.InstanceID, activation, now);
@@ -105,12 +108,18 @@ abstract class ReplayValidatedCastAOEs(BossModule module) : Components.GenericAO
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell)
     {
-        if (ConfigFor(spell.Action.ID) == null || spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence))
+        if (ConfigFor(spell.Action.ID) == null)
         {
             return;
         }
 
         var now = WorldState.CurrentTime;
+        PruneExpired();
+        if (IsDuplicateEvent(spell.GlobalSequence, spell.Action.ID, caster.InstanceID, now))
+        {
+            return;
+        }
+
         ++NumCasts;
         var activation = RemoveResolvedByEvent(spell.Action.ID, caster.InstanceID, now) ?? now;
         RememberResolved(spell.Action.ID, caster.InstanceID, activation, now);
@@ -121,24 +130,60 @@ abstract class ReplayValidatedCastAOEs(BossModule module) : Components.GenericAO
 
     private void AddOrRefresh(uint actionID, AOEShape shape, ulong actorID, WPos origin, Angle rotation, DateTime activation)
     {
-        RemoveAll(actionID, actorID);
-        _pending.Add(new(actionID, new(shape, origin, rotation, activation, actorID: actorID, shapeDistance: shape.Distance(origin, rotation))));
+        var aoe = new AOEInstance(shape, origin, rotation, activation, actorID: actorID, shapeDistance: shape.Distance(origin, rotation));
+        var duplicate = _pending.FindIndex(entry => entry.ActionID == actionID
+            && entry.AOE.ActorID == actorID
+            && Math.Abs((entry.AOE.Activation - activation).TotalSeconds) <= CastMatchTolerance);
+        if (duplicate >= 0)
+            _pending[duplicate].AOE = aoe;
+        else
+            _pending.Add(new(actionID, aoe));
         _pending.Sort((left, right) => left.AOE.Activation.CompareTo(right.AOE.Activation));
     }
 
     private DateTime? RemoveResolvedByEvent(uint actionID, ulong actorID, DateTime now)
     {
-        DateTime? activation = null;
-        for (var i = _pending.Count - 1; i >= 0; --i)
+        var index = -1;
+        for (var i = 0; i < _pending.Count; ++i)
         {
             var entry = _pending[i];
             if (entry.ActionID == actionID && entry.AOE.ActorID == actorID && entry.AOE.Activation <= now.AddSeconds(EventResolveTolerance))
             {
-                activation = activation == null || entry.AOE.Activation < activation ? entry.AOE.Activation : activation;
-                _pending.RemoveAt(i);
+                index = i;
+                break;
             }
         }
+        if (index < 0)
+            return null;
+
+        var activation = _pending[index].AOE.Activation;
+        _pending.RemoveAt(index);
         return activation;
+    }
+
+    private DateTime? RemoveMatchingCast(uint actionID, ulong actorID, DateTime activation)
+    {
+        var index = -1;
+        var bestDelta = double.MaxValue;
+        for (var i = 0; i < _pending.Count; ++i)
+        {
+            var entry = _pending[i];
+            if (entry.ActionID != actionID || entry.AOE.ActorID != actorID)
+                continue;
+
+            var delta = Math.Abs((entry.AOE.Activation - activation).TotalSeconds);
+            if (delta <= CastMatchTolerance && delta < bestDelta)
+            {
+                index = i;
+                bestDelta = delta;
+            }
+        }
+        if (index < 0)
+            return null;
+
+        var matchedActivation = _pending[index].AOE.Activation;
+        _pending.RemoveAt(index);
+        return matchedActivation;
     }
 
     private bool WasRecentlyResolved(uint actionID, ulong actorID, DateTime activation)
@@ -146,8 +191,23 @@ abstract class ReplayValidatedCastAOEs(BossModule module) : Components.GenericAO
 
     private void RememberResolved(uint actionID, ulong actorID, DateTime activation, DateTime now)
     {
-        _resolved.RemoveAll(resolved => resolved.ActionID == actionID && resolved.ActorID == actorID);
+        _resolved.RemoveAll(resolved => resolved.ActionID == actionID
+            && resolved.ActorID == actorID
+            && Math.Abs((resolved.Activation - activation).TotalSeconds) <= CastMatchTolerance);
         _resolved.Add(new(actionID, actorID, activation, now.AddSeconds(TombstoneWindow)));
+    }
+
+    private bool IsDuplicateEvent(uint globalSequence, uint actionID, ulong actorID, DateTime now)
+    {
+        if (globalSequence == 0)
+            return false;
+
+        var key = new EventKey(globalSequence, actionID, actorID);
+        if (_seenEvents.TryGetValue(key, out var expiresAt) && now <= expiresAt)
+            return true;
+
+        _seenEvents[key] = now.AddSeconds(EventDedupWindow);
+        return false;
     }
 
     private void PruneExpired()
@@ -155,14 +215,16 @@ abstract class ReplayValidatedCastAOEs(BossModule module) : Components.GenericAO
         var now = WorldState.CurrentTime;
         _pending.RemoveAll(entry => now > entry.AOE.Activation.AddSeconds(ExpireDelay));
         _resolved.RemoveAll(resolved => now > resolved.ExpiresAt);
+        foreach (var key in _seenEvents.Where(entry => now > entry.Value).Select(entry => entry.Key).ToArray())
+            _seenEvents.Remove(key);
     }
-
-    private void RemoveAll(uint actionID, ulong actorID) => _pending.RemoveAll(entry => entry.ActionID == actionID && entry.AOE.ActorID == actorID);
 
     private void RemoveActor(ulong actorID)
     {
         _pending.RemoveAll(entry => entry.AOE.ActorID == actorID);
         _resolved.RemoveAll(entry => entry.ActorID == actorID);
+        foreach (var key in _seenEvents.Keys.Where(key => key.ActorID == actorID).ToArray())
+            _seenEvents.Remove(key);
     }
 }
 
@@ -184,9 +246,13 @@ abstract class ReplayValidatedOppositeAOEs(BossModule module) : Components.Gener
     }
 
     private const double ExpireDelay = 2d;
+    private const double CastMatchTolerance = 0.75d;
+    private const double EventResolveTolerance = 0.5d;
+    private const double EventDedupWindow = 2d;
+    private readonly record struct EventKey(uint GlobalSequence, uint ActionID, ulong ActorID);
     private readonly List<Sequence> _sequences = [with(4)];
     private readonly List<AOEInstance> _displayed = [with(4)];
-    private readonly HashSet<uint> _seenGlobalSequences = [];
+    private readonly Dictionary<EventKey, DateTime> _seenEvents = [];
 
     protected abstract SequenceConfig? ConfigFor(uint firstActionID);
 
@@ -210,10 +276,14 @@ abstract class ReplayValidatedOppositeAOEs(BossModule module) : Components.Gener
             return;
 
         var activation = Module.CastFinishAt(spell);
-        if (activation <= WorldState.CurrentTime || _sequences.Any(sequence => sequence.ActorID == caster.InstanceID && sequence.FirstActionID == spell.Action.ID && sequence.FirstResolved))
+        if (activation <= WorldState.CurrentTime)
             return;
 
-        _sequences.RemoveAll(sequence => sequence.ActorID == caster.InstanceID && sequence.FirstActionID == spell.Action.ID);
+        if (_sequences.Any(sequence => sequence.ActorID == caster.InstanceID
+            && sequence.FirstActionID == spell.Action.ID
+            && Math.Abs((sequence.First.Activation - activation).TotalSeconds) <= CastMatchTolerance))
+            return;
+
         var firstRotation = spell.Rotation + config.FirstRotationOffset;
         var secondRotation = firstRotation + 180f.Degrees();
         var secondActivation = activation.AddSeconds(config.SecondDelay);
@@ -224,28 +294,35 @@ abstract class ReplayValidatedOppositeAOEs(BossModule module) : Components.Gener
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell)
     {
-        if (spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence))
+        var now = WorldState.CurrentTime;
+        PruneExpired();
+        if (IsDuplicateEvent(spell.GlobalSequence, spell.Action.ID, caster.InstanceID, now))
             return;
 
-        for (var i = _sequences.Count - 1; i >= 0; --i)
+        var firstIndex = -1;
+        var secondIndex = -1;
+        for (var i = 0; i < _sequences.Count; ++i)
         {
             var sequence = _sequences[i];
             if (sequence.ActorID != caster.InstanceID)
                 continue;
 
-            if (spell.Action.ID == sequence.FirstActionID && !sequence.FirstResolved)
-            {
-                sequence.FirstResolved = true;
-                ++NumCasts;
-                return;
-            }
-            if (spell.Action.ID == sequence.SecondActionID)
-            {
-                _sequences.RemoveAt(i);
-                ++NumCasts;
-                return;
-            }
+            if (firstIndex < 0 && spell.Action.ID == sequence.FirstActionID && !sequence.FirstResolved
+                && sequence.First.Activation <= now.AddSeconds(EventResolveTolerance))
+                firstIndex = i;
+            if (secondIndex < 0 && spell.Action.ID == sequence.SecondActionID
+                && sequence.Second.Activation <= now.AddSeconds(EventResolveTolerance))
+                secondIndex = i;
         }
+
+        if (firstIndex >= 0)
+            _sequences[firstIndex].FirstResolved = true;
+        else if (secondIndex >= 0)
+            _sequences.RemoveAt(secondIndex);
+        else
+            return;
+
+        ++NumCasts;
     }
 
     public override void OnActorDeath(Actor actor) => RemoveActor(actor.InstanceID);
@@ -258,7 +335,27 @@ abstract class ReplayValidatedOppositeAOEs(BossModule module) : Components.Gener
             if (!sequence.FirstResolved && now > sequence.First.Activation.AddSeconds(0.5d))
                 sequence.FirstResolved = true;
         _sequences.RemoveAll(sequence => now > sequence.Second.Activation.AddSeconds(ExpireDelay));
+        foreach (var key in _seenEvents.Where(entry => now > entry.Value).Select(entry => entry.Key).ToArray())
+            _seenEvents.Remove(key);
     }
 
-    private void RemoveActor(ulong actorID) => _sequences.RemoveAll(sequence => sequence.ActorID == actorID);
+    private bool IsDuplicateEvent(uint globalSequence, uint actionID, ulong actorID, DateTime now)
+    {
+        if (globalSequence == 0)
+            return false;
+
+        var key = new EventKey(globalSequence, actionID, actorID);
+        if (_seenEvents.TryGetValue(key, out var expiresAt) && now <= expiresAt)
+            return true;
+
+        _seenEvents[key] = now.AddSeconds(EventDedupWindow);
+        return false;
+    }
+
+    private void RemoveActor(ulong actorID)
+    {
+        _sequences.RemoveAll(sequence => sequence.ActorID == actorID);
+        foreach (var key in _seenEvents.Keys.Where(key => key.ActorID == actorID).ToArray())
+            _seenEvents.Remove(key);
+    }
 }

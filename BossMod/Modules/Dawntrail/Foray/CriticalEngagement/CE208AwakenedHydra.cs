@@ -136,7 +136,9 @@ sealed class HydraAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 
     // Spill, shockwave and multi-breath packets expose later waves before the first resolves.
     // Preserve every preview while only the earliest simultaneous batch constrains movement.
-    protected override double RiskyActivationWindow => 0.25d;
+    // Adjacent elemental waves are ~1.07s apart. Include the next wave immediately so the green
+    // spill circles receive an AI forbidden zone before the previous batch finishes resolving.
+    protected override double RiskyActivationWindow => 1.25d;
 
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {

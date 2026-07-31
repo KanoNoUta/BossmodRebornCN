@@ -50,7 +50,10 @@ sealed class ThunderboltPuddle(BossModule module) : Components.GenericAOEs(modul
             case AID.ThunderboltPuddle7:
             case AID.ThunderboltPuddle8:
                 if (!_aoes.Any(aoe => aoe.ActorID == caster.InstanceID))
-                    _aoes.Add(new(Shape, spell.LocXZ, activation: Module.CastFinishAt(spell), actorID: caster.InstanceID,
+                    // Start movement one second before the damage packet. The nine circles resolve
+                    // in 0.5s steps; waiting for the raw finish time makes autorotation trail the
+                    // visible sequence by roughly one circle.
+                    _aoes.Add(new(Shape, spell.LocXZ, activation: Module.CastFinishAt(spell, -1f), actorID: caster.InstanceID,
                         shapeDistance: Shape.Distance(spell.LocXZ, default)));
                 break;
         }

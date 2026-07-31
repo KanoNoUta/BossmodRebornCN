@@ -112,16 +112,19 @@ sealed class DualCuts(BossModule module) : ReplayValidatedCastAOEs(module)
 sealed class DashingCuts(BossModule module) : Components.GenericAOEs(module)
 {
     private const double EventResolveTolerance = 0.5d;
+    private const double CastMatchTolerance = 0.75d;
     private const double TombstoneWindow = 1d;
+    private const double EventDedupWindow = 2d;
     private const double ExpireDelay = 2d;
 
     private readonly record struct PendingCharge(uint ActionID, AOEInstance AOE);
     private readonly record struct ResolvedCharge(uint ActionID, ulong ActorID, DateTime Activation, DateTime ExpiresAt);
+    private readonly record struct EventKey(uint GlobalSequence, uint ActionID, ulong ActorID);
 
     private readonly List<PendingCharge> _pending = [with(4)];
     private readonly List<AOEInstance> _displayed = [with(4)];
     private readonly List<ResolvedCharge> _resolved = [with(4)];
-    private readonly HashSet<uint> _seenGlobalSequences = [];
+    private readonly Dictionary<EventKey, DateTime> _seenEvents = [];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
     {
@@ -149,10 +152,16 @@ sealed class DashingCuts(BossModule module) : Components.GenericAOEs(module)
         if (length <= 0.1f)
             return;
 
-        RemoveAll(spell.Action.ID, caster.InstanceID);
         var rotation = Angle.FromDirection(direction);
         var shape = new AOEShapeRect(length, 5f);
-        _pending.Add(new(spell.Action.ID, new(shape, caster.Position, rotation, activation, actorID: caster.InstanceID, shapeDistance: shape.Distance(caster.Position, rotation))));
+        var aoe = new AOEInstance(shape, caster.Position, rotation, activation, actorID: caster.InstanceID, shapeDistance: shape.Distance(caster.Position, rotation));
+        var duplicate = _pending.FindIndex(pending => pending.ActionID == spell.Action.ID
+            && pending.AOE.ActorID == caster.InstanceID
+            && Math.Abs((pending.AOE.Activation - activation).TotalSeconds) <= CastMatchTolerance);
+        if (duplicate >= 0)
+            _pending[duplicate] = new(spell.Action.ID, aoe);
+        else
+            _pending.Add(new(spell.Action.ID, aoe));
         _pending.Sort((left, right) => left.AOE.Activation.CompareTo(right.AOE.Activation));
     }
 
@@ -163,17 +172,21 @@ sealed class DashingCuts(BossModule module) : Components.GenericAOEs(module)
 
         var now = WorldState.CurrentTime;
         var activation = Module.CastFinishAt(spell);
-        RemoveAll(spell.Action.ID, caster.InstanceID);
+        RemoveMatchingCast(spell.Action.ID, caster.InstanceID, activation);
         if (spell.EventHappened || activation <= now.AddSeconds(EventResolveTolerance))
             RememberResolved(spell.Action.ID, caster.InstanceID, activation, now);
     }
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell)
     {
-        if (!IsWatched(spell.Action.ID) || spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence))
+        if (!IsWatched(spell.Action.ID))
             return;
 
         var now = WorldState.CurrentTime;
+        PruneExpired();
+        if (IsDuplicateEvent(spell.GlobalSequence, spell.Action.ID, caster.InstanceID, now))
+            return;
+
         ++NumCasts;
         var activation = RemoveResolvedByEvent(spell.Action.ID, caster.InstanceID, now) ?? now;
         RememberResolved(spell.Action.ID, caster.InstanceID, activation, now);
@@ -186,17 +199,47 @@ sealed class DashingCuts(BossModule module) : Components.GenericAOEs(module)
 
     private DateTime? RemoveResolvedByEvent(uint actionID, ulong actorID, DateTime now)
     {
-        DateTime? activation = null;
-        for (var i = _pending.Count - 1; i >= 0; --i)
+        var index = -1;
+        for (var i = 0; i < _pending.Count; ++i)
         {
             var pending = _pending[i];
             if (pending.ActionID == actionID && pending.AOE.ActorID == actorID && pending.AOE.Activation <= now.AddSeconds(EventResolveTolerance))
             {
-                activation = activation == null || pending.AOE.Activation < activation ? pending.AOE.Activation : activation;
-                _pending.RemoveAt(i);
+                index = i;
+                break;
             }
         }
+        if (index < 0)
+            return null;
+
+        var activation = _pending[index].AOE.Activation;
+        _pending.RemoveAt(index);
         return activation;
+    }
+
+    private DateTime? RemoveMatchingCast(uint actionID, ulong actorID, DateTime activation)
+    {
+        var index = -1;
+        var bestDelta = double.MaxValue;
+        for (var i = 0; i < _pending.Count; ++i)
+        {
+            var pending = _pending[i];
+            if (pending.ActionID != actionID || pending.AOE.ActorID != actorID)
+                continue;
+
+            var delta = Math.Abs((pending.AOE.Activation - activation).TotalSeconds);
+            if (delta <= CastMatchTolerance && delta < bestDelta)
+            {
+                index = i;
+                bestDelta = delta;
+            }
+        }
+        if (index < 0)
+            return null;
+
+        var matchedActivation = _pending[index].AOE.Activation;
+        _pending.RemoveAt(index);
+        return matchedActivation;
     }
 
     private bool WasRecentlyResolved(uint actionID, ulong actorID, DateTime activation)
@@ -204,8 +247,23 @@ sealed class DashingCuts(BossModule module) : Components.GenericAOEs(module)
 
     private void RememberResolved(uint actionID, ulong actorID, DateTime activation, DateTime now)
     {
-        _resolved.RemoveAll(resolved => resolved.ActionID == actionID && resolved.ActorID == actorID);
+        _resolved.RemoveAll(resolved => resolved.ActionID == actionID
+            && resolved.ActorID == actorID
+            && Math.Abs((resolved.Activation - activation).TotalSeconds) <= CastMatchTolerance);
         _resolved.Add(new(actionID, actorID, activation, now.AddSeconds(TombstoneWindow)));
+    }
+
+    private bool IsDuplicateEvent(uint globalSequence, uint actionID, ulong actorID, DateTime now)
+    {
+        if (globalSequence == 0)
+            return false;
+
+        var key = new EventKey(globalSequence, actionID, actorID);
+        if (_seenEvents.TryGetValue(key, out var expiresAt) && now <= expiresAt)
+            return true;
+
+        _seenEvents[key] = now.AddSeconds(EventDedupWindow);
+        return false;
     }
 
     private void PruneExpired()
@@ -213,14 +271,16 @@ sealed class DashingCuts(BossModule module) : Components.GenericAOEs(module)
         var now = WorldState.CurrentTime;
         _pending.RemoveAll(pending => now > pending.AOE.Activation.AddSeconds(ExpireDelay));
         _resolved.RemoveAll(resolved => now > resolved.ExpiresAt);
+        foreach (var key in _seenEvents.Where(entry => now > entry.Value).Select(entry => entry.Key).ToArray())
+            _seenEvents.Remove(key);
     }
-
-    private void RemoveAll(uint actionID, ulong actorID) => _pending.RemoveAll(pending => pending.ActionID == actionID && pending.AOE.ActorID == actorID);
 
     private void RemoveActor(ulong actorID)
     {
         _pending.RemoveAll(pending => pending.AOE.ActorID == actorID);
         _resolved.RemoveAll(resolved => resolved.ActorID == actorID);
+        foreach (var key in _seenEvents.Keys.Where(key => key.ActorID == actorID).ToArray())
+            _seenEvents.Remove(key);
     }
 }
 

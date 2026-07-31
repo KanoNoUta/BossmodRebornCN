@@ -20,7 +20,7 @@ public enum AID : uint
     HurricaneVisual = 0xB94C,
     HurricaneKnockback = 0xB94D, // 5y away knockback
     RendingWindVisual = 0xB94E,
-    RendingWind = 0xB94F, // 60y long, 8y wide rect
+    RendingWind = 0xB94F, // range 60, 8y wide cross; two rotated crosses form the eight-way pattern
     GustHit = 0xB950, // raidwide damage and 24y forward knockback
     GaleBlade = 0xB951, // 60y 180-degree cone
     ScatterFeathers = 0xB952,
@@ -30,14 +30,14 @@ public enum AID : uint
     DownburstVisual = 0xB956,
     CycloneRingVisual = 0xB957,
     Downburst = 0xB958, // location, 15y circle
-    CycloneRing = 0xB959, // 10-60y donut
+    CycloneRing = 0xB959, // 5-60y donut
     HurricaneHit = 0xBBF8, // helpers, no cast, raidwide damage
     GustTelegraph = 0xBC7A // helper, 60y long, 60y wide rect
 }
 
 sealed class WindBoundary(BossModule module) : Components.GenericAOEs(module)
 {
-    private static readonly AOEShapeDonut Shape = new(20f, 30f);
+    private static readonly AOEShapeDonut Shape = new(19f, 30f);
     private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
@@ -47,10 +47,10 @@ sealed class KidnapperAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 {
     private static readonly AOEShapeCone Half = new(60f, 90f.Degrees());
     private static readonly AOEShapeCone Cone = new(60f, 30f.Degrees());
-    private static readonly AOEShapeRect Rending = new(60f, 4f);
+    private static readonly AOEShapeCross Rending = new(60f, 4f);
     private static readonly AOEShapeCircle Downburst = new(15f);
     private static readonly AOEShapeCircle Bloom = new(13f);
-    private static readonly AOEShapeDonut Ring = new(10f, 60f);
+    private static readonly AOEShapeDonut Ring = new(5f, 60f);
 
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
@@ -62,6 +62,24 @@ sealed class KidnapperAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
         (uint)AID.CycloneRing => new(Ring),
         _ => null
     };
+}
+
+// GenericKnockback only renders displacement and does not add an AI forbidden zone. The moving
+// hurricane body is itself the four-yalm contact AOE, so publish a slightly padded live hazard too.
+sealed class HurricaneHazards(BossModule module) : Components.GenericAOEs(module)
+{
+    private static readonly AOEShapeCircle Shape = new(4.5f);
+    private readonly List<AOEInstance> _displayed = [with(8)];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
+    {
+        _displayed.Clear();
+        foreach (var hurricane in Module.Enemies((uint)OID.Hurricane))
+            if (!hurricane.IsDeadOrDestroyed)
+                _displayed.Add(new(Shape, hurricane.Position, actorID: hurricane.InstanceID,
+                    shapeDistance: Shape.Distance(hurricane.Position, default)));
+        return CollectionsMarshal.AsSpan(_displayed);
+    }
 }
 
 // Hurricanes are persistent actors rather than cast bars. Their B94D contact event applies a
@@ -94,6 +112,7 @@ sealed class IslandKidnapperStates : StateMachineBuilder
         TrivialPhase()
             .ActivateOnEnter<WindBoundary>()
             .ActivateOnEnter<KidnapperAOEs>()
+            .ActivateOnEnter<HurricaneHazards>()
             .ActivateOnEnter<HurricaneKnockbacks>()
             .ActivateOnEnter<GustKnockback>()
             .ActivateOnEnter<KidnapperRaidwides>();
