@@ -29,7 +29,47 @@ public enum SID : uint {
 sealed class GardenersHymn(BossModule module) : Components.SimpleAOEs(module, (uint)AID.GardenersHymn, new AOEShapeCircle(5.0f));
 sealed class OdeOfTheUnderfoot(BossModule module) : Components.SimpleAOEs(module, (uint)AID.OdeOfTheUnderfoot, new AOEShapeCircle(10.0f));
 sealed class IambicMarch(BossModule module) : Components.StatusDrivenForcedMarch(module, 3.0f, (uint)SID.ForwardMarch, (uint)SID.AboutFace, (uint)default,
-    (uint)default, (uint)SID.ForcedMarch);
+// The march direction follows the player's facing, so automation must pre-aim: a forward march
+// towards the boss lands inside the OdeOfTheUnderfoot circle and the seed bursts. Replay shows the
+// AI marched east into the 10y circle and ate the hit, so mark any position whose forced-march
+// destination is inside those zones as forbidden, forcing it to turn/relocate before the march.
+    (uint)default, (uint)SID.ForcedMarch)
+{
+    public override bool DestinationUnsafe(int slot, Actor actor, WPos pos)
+    {
+        if (base.DestinationUnsafe(slot, actor, pos))
+            return true;
+
+        foreach (var component in Module.Components)
+        {
+            if (component is Burst burst)
+            {
+                foreach (ref readonly var aoe in burst.ActiveAOEs(slot, actor))
+                    if (aoe.Check(pos))
+                        return true;
+            }
+            if (component is OdeOfTheUnderfoot ode)
+            {
+                foreach (ref readonly var aoe in ode.ActiveAOEs(slot, actor))
+                    if (aoe.Check(pos))
+                        return true;
+            }
+        }
+        return false;
+    }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        var movements = ForcedMovements(actor);
+        if (movements.Count == 0)
+            return;
+
+        // The march destination depends on the current facing. If it lands in a burst or the boss
+        // circle, forbid the current cell so the pathfinder turns the player to a safer heading.
+        if (DestinationUnsafe(slot, actor, movements[^1].to))
+            hints.AddForbiddenZone(new SDCircle(actor.Position, 1.5f), WorldState.FutureTime(10d));
+    }
+}
 
 // Gardeners' Hymn identifies the four seeds that will explode about 3.5s after its cast resolves.
 // Keep that long advance warning, then replace its estimated activation with the authoritative

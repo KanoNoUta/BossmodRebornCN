@@ -127,6 +127,40 @@ sealed class MovingNecrohaze(BossModule module) : Components.GenericAOEs(module)
     }
 }
 
+// During Aetherial Ward the boss raises a reflecting magic barrier (the non-targetable MagicBarrier
+// object). Any damage dealt to the boss while that barrier stands bounces straight back and wipes
+// the automated party, so mark the boss un-attackable for as long as the barrier actor exists. This
+// also frees the AI to keep dodging the moving Necrohaze "saw" circles instead of standing still to
+// attack the warded boss. Keying off the barrier actor's presence self-resets when it despawns and
+// fails safe (no barrier detected -> normal attacking).
+sealed class AetherialWardBarrier(BossModule module) : Components.GenericAOEs(module)
+{
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => [];
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        var warded = false;
+        foreach (var barrier in Module.Enemies((uint)OID.MagicBarrier))
+        {
+            if (!barrier.IsDeadOrDestroyed)
+            {
+                warded = true;
+                break;
+            }
+        }
+        if (!warded)
+            return;
+
+        var count = hints.PotentialTargets.Count;
+        for (var i = 0; i < count; ++i)
+        {
+            var e = hints.PotentialTargets[i];
+            if (e.Actor.OID == (uint)OID.Boss)
+                e.Priority = AIHints.Enemy.PriorityInvincible;
+        }
+    }
+}
+
 // Damage is split between helpers; the boss visuals are the stable, non-duplicated warnings.
 sealed class CursedResurgenceRaidwides(BossModule module) : Components.RaidwideCasts(module,
     [(uint)AID.MortalStormVisual, (uint)AID.HowlingDarknessVisual]);
@@ -139,6 +173,7 @@ sealed class CursedResurgenceStates : StateMachineBuilder
             .ActivateOnEnter<CursedResurgenceAOEs>()
             .ActivateOnEnter<ZombieGas>()
             .ActivateOnEnter<MovingNecrohaze>()
+            .ActivateOnEnter<AetherialWardBarrier>()
             .ActivateOnEnter<CursedResurgenceRaidwides>();
     }
 }

@@ -37,10 +37,20 @@ public enum AID : uint
 
 sealed class WindBoundary(BossModule module) : Components.GenericAOEs(module)
 {
-    private static readonly AOEShapeDonut Shape = new(19f, 30f);
-    private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
+    // The wall is lethal from 19y outward; draw it accurately for the human overlay but mark it
+    // non-risky so the AI zone below can use a tighter inner radius.
+    private static readonly AOEShapeDonut Visual = new(19f, 30f);
+    // Give the AI a 2y buffer inside the true wall. The rotating WindBloom ice-flowers are 13y
+    // circles emitted from the 16y ring, so the only safe pocket is near dead center; without a
+    // buffer, squeezing away from a bloom can round the destination onto the 19y deathwall. Keeping
+    // the AI at or inside 17y guarantees it never clips the wall while dodging blooms.
+    private static readonly AOEShapeDonut Forbidden = new(17f, 30f);
+    private readonly AOEInstance[] _aoe = [new(Visual, module.Arena.Center, risky: false)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+        => hints.AddForbiddenZone(Forbidden, Module.Arena.Center);
 }
 
 sealed class KidnapperAOEs(BossModule module) : ReplayValidatedCastAOEs(module)

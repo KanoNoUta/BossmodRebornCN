@@ -93,10 +93,25 @@ sealed class CircularKnockback(BossModule module) : Components.GenericKnockback(
 
     public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
     {
-        var now = WorldState.CurrentTime;
+        // The lateral (aside) shove resolves ~3.4s before this radial push, so the player is already
+        // displaced by it when the circle resolves. If we evaluate the safe square from the current
+        // position we get the wrong side of the origin (the aside can carry the player past the
+        // circle center, flipping the radial escape direction into the fence). While the aside is
+        // still pending, offset both the square and the push origin by that displacement so the
+        // forbidden zone describes the post-aside push. Show it for the whole cast (no 2s gate) so
+        // automation can pre-position for the combined knockback rather than react after the shove.
+        var aside = Module.FindComponent<KnockAside>();
         foreach (var kb in _casters)
-            if (now >= kb.Activation.AddSeconds(-ShowBeforeHit))
-                hints.AddForbiddenZone(new SDKnockbackInAABBSquareAwayFromOrigin(Arena.Center, kb.Origin, kb.Distance, ArenaHalfWidth), kb.Activation);
+        {
+            var center = Arena.Center;
+            var origin = kb.Origin;
+            if (aside != null && aside.TryGetPendingAsidePush(kb.Activation, out var a))
+            {
+                center -= a;
+                origin -= a;
+            }
+            hints.AddForbiddenZone(new SDKnockbackInAABBSquareAwayFromOrigin(center, origin, kb.Distance, ArenaHalfWidth), kb.Activation);
+        }
     }
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
@@ -159,6 +174,22 @@ sealed class KnockAside(BossModule module) : Components.GenericKnockback(module)
     private readonly List<AsideSource> _sources = [];
     private readonly List<(WPos AsidePos, DateTime Activation, ulong ActorID)> _pendingAside = [];
     private readonly List<Knockback> _displayed = [with(4)];
+
+    // Exposes the lateral push displacement (15y * direction) that will resolve before the given
+    // circular-knockback activation and has not yet been applied, so CircularKnockback can offset
+    // its safe square by it. Returns false when no such aside is still pending.
+    public bool TryGetPendingAsidePush(DateTime circleActivation, out WDir push)
+    {
+        var now = WorldState.CurrentTime;
+        foreach (var source in _sources)
+            if (source.Activation < circleActivation && now < source.Activation)
+            {
+                push = Distance * source.PushDirection(Arena.Center);
+                return true;
+            }
+        push = default;
+        return false;
+    }
 
     public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor)
     {
