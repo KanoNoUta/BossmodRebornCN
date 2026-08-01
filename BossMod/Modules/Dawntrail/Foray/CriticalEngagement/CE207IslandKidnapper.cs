@@ -102,8 +102,25 @@ sealed class HurricaneKnockbacks(BossModule module) : Components.GenericKnockbac
     }
 }
 
-// BC7A is the cast-bar telegraph for B950, whose action effect is a 24y SourceForward knockback.
-sealed class GustKnockback(BossModule module) : Components.SimpleKnockbacks(module, (uint)AID.GustTelegraph, 24f, shape: new AOEShapeRect(60f, 30f), kind: Kind.DirForward);
+// BC7A is the cast-bar telegraph for B950, whose action effect is a 24y directional knockback.
+// The gust comes from the wall on the main tank's side and flings everyone across the arena, so
+// the helper's cast rotation already encodes the true push direction; the tank only decides which
+// side the helper spawns on. Do not re-derive the direction from the tank's position - the helper
+// rotation is authoritative (and stays valid even when the tank is mid-arena, which will carry the
+// whole party out of bounds).
+sealed class GustKnockback(BossModule module) : Components.SimpleKnockbacks(module, (uint)AID.GustTelegraph, 24f, shape: new AOEShapeRect(60f, 30f), kind: Kind.DirForward)
+{
+    public override void AddHints(int slot, Actor actor, TextHints hints)
+    {
+        base.AddHints(slot, actor, hints);
+        if (Casters.Count == 0)
+            return;
+
+        var tank = Module.PrimaryActor?.TargetID is ulong id && id != 0 ? WorldState.Actors.Find(id) : null;
+        if (tank != null && !tank.IsDeadOrDestroyed && (tank.Position - Module.Arena.Center).Length() < 5f)
+            hints.Add("Main tank in the middle - the gust will push the whole party out of bounds!");
+    }
+}
 // B94C resolves into the BBF8 helper raidwide about 0.9s after the boss cast. BC7A similarly
 // resolves into B950 while applying the directional knockback.
 sealed class KidnapperRaidwides(BossModule module) : Components.RaidwideCasts(module, [(uint)AID.HurricaneVisual, (uint)AID.GustTelegraph]);
