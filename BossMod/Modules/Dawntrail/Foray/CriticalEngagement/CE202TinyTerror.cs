@@ -243,6 +243,16 @@ static class TinyMageMechanic {
     // 174.2->189.6, 241.6->256.8), so both growable components share this delay.
     public const double GrowResolveDelay = 15.5d;
 
+    public static List<Actor> ExistingMages(BossModule module) {
+        var result = new List<Actor>(4);
+        foreach (var mage in module.Enemies((uint)OID.TinyApprentice)) {
+            if (!mage.IsDeadOrDestroyed) {
+                AddMage(result, mage, module.Arena.Center);
+            }
+        }
+        return result;
+    }
+
     public static void AddMage(List<Actor> mages, Actor actor, WPos center) {
         if (mages.Any(mage => mage.InstanceID == actor.InstanceID)) {
             return;
@@ -289,11 +299,14 @@ static class TinyMageMechanic {
 
 sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
     private static readonly AOEShapeCircle Shape = new(18.0f);
-    private readonly List<Actor> mages = [];
+    private const double TelegraphHold = 0.6d;
+    private readonly List<Actor> mages = TinyMageMechanic.ExistingMages(module);
     private Actor? orb;
     private WPos? start;
+    private WPos? directTarget;
     private ulong startActorID;
     private DateTime activation;
+    private DateTime clearAt;
     private float previousAngle;
     private float angularTravel;
     private int direction;
@@ -301,6 +314,13 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
     public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
         if (spell.Action.ID == (uint)AID.SmallForOne) {
             ResetWave();
+        } else if (spell.Action.ID == (uint)AID.TinyFlare1 && !spell.EventHappened) {
+            // The resolving helper is authoritative and is also available when apprentice/orb
+            // spawn or movement packets were missed. This prevents an entire fire wave from
+            // disappearing merely because the four-actor reconstruction was incomplete.
+            directTarget = caster.Position;
+            activation = Module.CastFinishAt(spell);
+            clearAt = default;
         }
     }
 
@@ -308,17 +328,16 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
         if (actor.OID == (uint)OID.TinyApprentice) {
             TinyMageMechanic.AddMage(mages, actor, Arena.Center);
         } else if (actor.OID == (uint)OID.FlareSphereGrow) {
-            orb = actor;
-            start = actor.Position;
-            startActorID = actor.InstanceID;
-            activation = WorldState.FutureTime(TinyMageMechanic.GrowResolveDelay);
-            previousAngle = TinyMageMechanic.AngleFromNorth(actor.Position, Arena.Center);
-            angularTravel = default;
-            direction = default;
+            StartOrb(actor);
         }
     }
 
     public override void Update() {
+        RecoverExistingActors();
+        if (clearAt != default && WorldState.CurrentTime >= clearAt) {
+            ClearStart();
+            return;
+        }
         if (orb != null && direction == 0) {
             direction = TinyMageMechanic.ObserveDirection(orb, Arena.Center, ref previousAngle, ref angularTravel);
         }
@@ -334,11 +353,17 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell) {
         if (spell.Action.ID == (uint)AID.TinyFlare1) {
-            ClearStart();
+            // The damage packet precedes the visible floor telegraph disappearing. Retain the
+            // forbidden circle briefly so automation does not immediately walk into the fading VFX.
+            clearAt = WorldState.FutureTime(TelegraphHold);
         }
     }
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) {
+        RecoverExistingActors();
+        if (directTarget is { } resolved) {
+            return new AOEInstance[1] { new(Shape, resolved, activation: activation) };
+        }
         if (mages.Count != 4 || start == null || direction == 0) {
             return [];
         }
@@ -355,15 +380,42 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
     private void RemoveActor(Actor actor) {
         TinyMageMechanic.RemoveMage(mages, actor.InstanceID);
         if (actor.InstanceID == startActorID) {
-            ClearStart();
+            clearAt = WorldState.FutureTime(TelegraphHold);
         }
+    }
+
+    private void RecoverExistingActors() {
+        foreach (var mage in Module.Enemies((uint)OID.TinyApprentice)) {
+            if (!mage.IsDeadOrDestroyed) {
+                TinyMageMechanic.AddMage(mages, mage, Arena.Center);
+            }
+        }
+        if (orb == null) {
+            var existing = Module.Enemies((uint)OID.FlareSphereGrow).FirstOrDefault(actor => !actor.IsDeadOrDestroyed);
+            if (existing != null) {
+                StartOrb(existing);
+            }
+        }
+    }
+
+    private void StartOrb(Actor actor) {
+        orb = actor;
+        start = actor.Position;
+        startActorID = actor.InstanceID;
+        activation = WorldState.FutureTime(TinyMageMechanic.GrowResolveDelay);
+        clearAt = default;
+        previousAngle = TinyMageMechanic.AngleFromNorth(actor.Position, Arena.Center);
+        angularTravel = default;
+        direction = default;
     }
 
     private void ClearStart() {
         orb = null;
         start = null;
+        directTarget = null;
         startActorID = default;
         activation = default;
+        clearAt = default;
         previousAngle = default;
         angularTravel = default;
         direction = default;
@@ -376,9 +428,10 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
 }
 
 sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(module) {
-    private readonly List<Actor> mages = [];
+    private readonly List<Actor> mages = TinyMageMechanic.ExistingMages(module);
     private Actor? orb;
     private WPos? start;
+    private WPos? directTarget;
     private ulong startActorID;
     private DateTime activation;
     private float previousAngle;
@@ -388,6 +441,9 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
     public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
         if (spell.Action.ID == (uint)AID.SmallForOne) {
             ResetWave();
+        } else if (spell.Action.ID == (uint)AID.TinyHoly1 && !spell.EventHappened) {
+            directTarget = caster.Position;
+            activation = Module.CastFinishAt(spell);
         }
     }
 
@@ -395,17 +451,12 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
         if (actor.OID == (uint)OID.TinyApprentice) {
             TinyMageMechanic.AddMage(mages, actor, Arena.Center);
         } else if (actor.OID == (uint)OID.HolySphere1Grow) {
-            orb = actor;
-            start = actor.Position;
-            startActorID = actor.InstanceID;
-            activation = WorldState.FutureTime(TinyMageMechanic.GrowResolveDelay);
-            previousAngle = TinyMageMechanic.AngleFromNorth(actor.Position, Arena.Center);
-            angularTravel = default;
-            direction = default;
+            StartOrb(actor);
         }
     }
 
     public override void Update() {
+        RecoverExistingActors();
         if (orb != null && direction == 0) {
             direction = TinyMageMechanic.ObserveDirection(orb, Arena.Center, ref previousAngle, ref angularTravel);
         }
@@ -426,6 +477,10 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
     }
 
     public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor) {
+        RecoverExistingActors();
+        if (directTarget is { } resolved) {
+            return new Knockback[1] { new(resolved, 15.0f, activation) };
+        }
         if (mages.Count != 4 || start == null || direction == 0) {
             return [];
         }
@@ -439,6 +494,14 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
         return new Knockback[1] { new(targetActor.Position, 15.0f, activation) };
     }
 
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints) {
+        var knockbacks = ActiveKnockbacks(slot, actor);
+        if (knockbacks.Length != 0) {
+            ref readonly var knockback = ref knockbacks[0];
+            hints.AddForbiddenZone(new SDKnockbackInCircleAwayFromOrigin(Arena.Center, knockback.Origin, knockback.Distance, 19f), knockback.Activation);
+        }
+    }
+
     private void RemoveActor(Actor actor) {
         TinyMageMechanic.RemoveMage(mages, actor.InstanceID);
         if (actor.InstanceID == startActorID) {
@@ -446,9 +509,34 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
         }
     }
 
+    private void RecoverExistingActors() {
+        foreach (var mage in Module.Enemies((uint)OID.TinyApprentice)) {
+            if (!mage.IsDeadOrDestroyed) {
+                TinyMageMechanic.AddMage(mages, mage, Arena.Center);
+            }
+        }
+        if (orb == null) {
+            var existing = Module.Enemies((uint)OID.HolySphere1Grow).FirstOrDefault(actor => !actor.IsDeadOrDestroyed);
+            if (existing != null) {
+                StartOrb(existing);
+            }
+        }
+    }
+
+    private void StartOrb(Actor actor) {
+        orb = actor;
+        start = actor.Position;
+        startActorID = actor.InstanceID;
+        activation = WorldState.FutureTime(TinyMageMechanic.GrowResolveDelay);
+        previousAngle = TinyMageMechanic.AngleFromNorth(actor.Position, Arena.Center);
+        angularTravel = default;
+        direction = default;
+    }
+
     private void ClearStart() {
         orb = null;
         start = null;
+        directTarget = null;
         startActorID = default;
         activation = default;
         previousAngle = default;
@@ -660,6 +748,14 @@ sealed class HolyCombo(BossModule module) : Components.GenericKnockback(module) 
 
         var next = upcoming[0];
         return new Knockback[1] { new(next.Origin, 15.0f, next.Activation, actorID: next.ActorID) };
+    }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints) {
+        var knockbacks = ActiveKnockbacks(slot, actor);
+        if (knockbacks.Length != 0) {
+            ref readonly var knockback = ref knockbacks[0];
+            hints.AddForbiddenZone(new SDKnockbackInCircleAwayFromOrigin(Arena.Center, knockback.Origin, knockback.Distance, 19f), knockback.Activation);
+        }
     }
 }
 

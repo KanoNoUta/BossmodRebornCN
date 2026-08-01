@@ -83,7 +83,12 @@ sealed class AppallingAOEs(BossModule module) : Components.GenericAOEs(module)
         Prune();
         _displayed.Clear();
         var ordered = _pending.OrderBy(p => p.Activation).ToArray();
-        var riskyDeadline = ordered.Length > 0 ? ordered[0].Activation.AddSeconds(0.25d) : DateTime.MinValue;
+        // Magic Hammer resolves as three one-second-spaced batches. If only the current batch is
+        // risky, AI picks a technically safe point that is already covered by the second batch and
+        // cannot leave the 8y circle in time. Keep the current and next batch forbidden so it plans
+        // the step pattern; including all three at once would incorrectly erase every useful route.
+        var riskWindow = ordered.Length > 0 && ordered[0].ActionID == (uint)AID.MagicHammerAOE ? 1.25d : 0.25d;
+        var riskyDeadline = ordered.Length > 0 ? ordered[0].Activation.AddSeconds(riskWindow) : DateTime.MinValue;
         foreach (var pending in ordered)
         {
             var source = pending.FollowCaster ? WorldState.Actors.Find(pending.ActorID) : null;

@@ -72,7 +72,10 @@ sealed class CircularKnockback(BossModule module) : Components.GenericKnockback(
 {
     private static readonly AOEShapeCircle Shape = new(60f);
     private const float Distance = 30f;
-    private const float ArenaHalfWidth = 24f;
+    // The floor is a 24y square, but a destination exactly on that mathematical edge is not a
+    // reliable landing point (character radius, interpolation and path stopping tolerance can all
+    // leave the client just outside). Reserve 1.5y inside the square for both knockbacks.
+    private const float SafeHalfWidth = 22.5f;
     private const double HitDelay = 6.0d;
     private const double ShowBeforeHit = 2d;
     private readonly List<Knockback> _casters = [];
@@ -110,7 +113,7 @@ sealed class CircularKnockback(BossModule module) : Components.GenericKnockback(
                 center -= a;
                 origin -= a;
             }
-            hints.AddForbiddenZone(new SDKnockbackInAABBSquareAwayFromOrigin(center, origin, kb.Distance, ArenaHalfWidth), kb.Activation);
+            hints.AddForbiddenZone(new SDKnockbackInAABBSquareAwayFromOrigin(center, origin, kb.Distance, SafeHalfWidth), kb.Activation);
         }
     }
 
@@ -151,7 +154,7 @@ sealed class KnockAside(BossModule module) : Components.GenericKnockback(module)
 {
     private static readonly AOEShapeRect Shape = new(40f, 30f);
     private const float Distance = 15f;
-    private const float ArenaHalfWidth = 24f;
+    private const float SafeHalfWidth = 22.5f;
     private const double HitDelay = 5.1d;
     private const double ShowBeforeHit = 2d;
 
@@ -216,7 +219,7 @@ sealed class KnockAside(BossModule module) : Components.GenericKnockback(module)
             if (now < source.Activation.AddSeconds(-ShowBeforeHit))
                 continue;
             var dir = source.PushDirection(Arena.Center);
-            hints.AddForbiddenZone(new SDKnockbackInAABBSquareFixedDirection(Arena.Center, Distance * dir, ArenaHalfWidth), source.Activation);
+            hints.AddForbiddenZone(new SDKnockbackInAABBSquareFixedDirection(Arena.Center, Distance * dir, SafeHalfWidth), source.Activation);
         }
     }
 
