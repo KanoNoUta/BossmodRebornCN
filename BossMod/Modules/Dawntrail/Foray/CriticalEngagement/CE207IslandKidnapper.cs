@@ -118,17 +118,63 @@ sealed class HurricaneKnockbacks(BossModule module) : Components.GenericKnockbac
 // side the helper spawns on. Do not re-derive the direction from the tank's position - the helper
 // rotation is authoritative (and stays valid even when the tank is mid-arena, which will carry the
 // whole party out of bounds).
-sealed class GustKnockback(BossModule module) : Components.SimpleKnockbacks(module, (uint)AID.GustTelegraph, 24f, shape: new AOEShapeRect(60f, 30f), kind: Kind.DirForward)
+sealed class GustKnockback(BossModule module) : Components.GenericKnockback(module)
 {
+    private static readonly AOEShapeRect Shape = new(60f, 30f);
+    private const float Distance = 24f;
+    private const float SafeRadius = 19f;
+    // Replay event timing is consistently about 0.60s after the helper cast finishes. Using the
+    // old 1.05s estimate scheduled the safe-edge constraint roughly 0.4s after the real knockback.
+    private const double HitDelay = 0.60d;
+    private readonly List<Knockback> _casters = [with(2)];
+
+    public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor)
+    {
+        PruneExpired();
+        return CollectionsMarshal.AsSpan(_casters);
+    }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        foreach (var kb in _casters)
+            hints.AddForbiddenZone(new SDKnockbackInCircleFixedDirection(Arena.Center, Distance * kb.Direction.ToDirection(), SafeRadius), kb.Activation);
+    }
+
     public override void AddHints(int slot, Actor actor, TextHints hints)
     {
         base.AddHints(slot, actor, hints);
-        if (Casters.Count == 0)
+        if (_casters.Count == 0)
             return;
 
         var tank = Module.PrimaryActor?.TargetID is ulong id && id != 0 ? WorldState.Actors.Find(id) : null;
         if (tank != null && !tank.IsDeadOrDestroyed && (tank.Position - Module.Arena.Center).Length() < 5f)
             hints.Add("Main tank in the middle - the gust will push the whole party out of bounds!");
+    }
+
+    public override void Update() => PruneExpired();
+
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
+    {
+        if (spell.Action.ID != (uint)AID.GustTelegraph || spell.EventHappened)
+            return;
+
+        _casters.RemoveAll(kb => kb.ActorID == caster.InstanceID);
+        _casters.Add(new(spell.LocXZ, Distance, Module.CastFinishAt(spell, HitDelay), Shape, spell.Rotation, Kind.DirForward, actorID: caster.InstanceID));
+    }
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
+    {
+        if (spell.Action.ID != (uint)AID.GustHit)
+            return;
+
+        _casters.Clear();
+        ++NumCasts;
+    }
+
+    private void PruneExpired()
+    {
+        var now = WorldState.CurrentTime;
+        _casters.RemoveAll(kb => now > kb.Activation.AddSeconds(1d));
     }
 }
 // B94C resolves into the BBF8 helper raidwide about 0.9s after the boss cast. BC7A similarly

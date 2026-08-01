@@ -64,10 +64,29 @@ sealed class IambicMarch(BossModule module) : Components.StatusDrivenForcedMarch
         if (movements.Count == 0)
             return;
 
-        // The march destination depends on the current facing. If it lands in a burst or the boss
-        // circle, forbid the current cell so the pathfinder turns the player to a safer heading.
+        // The march destination depends on facing. A forbidden circle at the current position only
+        // makes the pathfinder move somewhere else while it keeps facing the boss. Score candidate
+        // destinations by the facing they create, so movement itself pre-aims the upcoming march.
+        if (State.TryGetValue(actor.InstanceID, out var state) && state.ForcedEnd <= WorldState.CurrentTime && state.PendingMoves.Count != 0)
+        {
+            hints.GoalZones.Add(position => CandidateMarchSafe(slot, actor, position, state) ? 20f : 0f);
+        }
+
         if (DestinationUnsafe(slot, actor, movements[^1].to))
             hints.AddForbiddenZone(new SDCircle(actor.Position, 1.5f), WorldState.FutureTime(10d));
+    }
+
+    private bool CandidateMarchSafe(int slot, Actor actor, WPos position, PlayerState state)
+    {
+        var travel = position - actor.Position;
+        var direction = travel.LengthSq() > 0.01f ? Angle.FromDirection(travel) : actor.Rotation;
+        var destination = position;
+        foreach (var move in state.PendingMoves)
+        {
+            direction += move.dir;
+            destination += MovementSpeed * move.duration * direction.ToDirection();
+        }
+        return !DestinationUnsafe(slot, actor, destination);
     }
 }
 

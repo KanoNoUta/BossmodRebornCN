@@ -49,9 +49,8 @@ public enum AID : uint
 // ElementalSpill1 leaves a small poison pool at its resolved location. ToxinScatter then ticks
 // once per second at that same position for roughly ten seconds. The tick helpers are recycled
 // between waves, so tracking helper instance IDs would keep stale pools or create duplicates;
-// key the pools by position instead. Only the spill is authoritative for creating a pool: old
-// high-speed replays can retain stale helper coordinates on unmatched ticks, so those ticks may
-// refresh a nearby known pool but must never create a new one.
+// key the pools by position instead. A live in-arena toxin tick can also restore a pool when the
+// initial spill packet was missed (for example when the module activates mid-mechanic).
 sealed class ToxinPools(BossModule module) : Components.GenericAOEs(module)
 {
     // The green puddle spawns small and expands over roughly nine seconds (replay tick distances
@@ -107,9 +106,9 @@ sealed class ToxinPools(BossModule module) : Components.GenericAOEs(module)
         var isSpill = spell.Action.ID == (uint)AID.ElementalSpill1;
         if (pool == null)
         {
-            if (isSpill)
+            if (isSpill || caster.OID == (uint)OID.Helper && Arena.InBounds(origin))
             {
-                _pools.Add(new(origin, now, now.AddSeconds(PredictedLifetime)));
+                _pools.Add(new(origin, now, now.AddSeconds(isSpill ? PredictedLifetime : TickLifetime)));
             }
         }
         else

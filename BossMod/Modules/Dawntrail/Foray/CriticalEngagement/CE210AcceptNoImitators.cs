@@ -145,6 +145,18 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
 
     public override void Update()
     {
+        // Components can be activated after the helpers already received their growth status.
+        // Recover that live state instead of waiting for a status-gain packet that will never repeat.
+        foreach (var helper in Module.Enemies((uint)OID.Helper))
+        {
+            var status = helper.FindStatus((uint)SID.AreaOfInfluenceUp);
+            if (status is { } current && current.Extra is >= 1 and <= 7
+                && (!_extra.TryGetValue(helper.InstanceID, out var knownExtra) || knownExtra != current.Extra))
+            {
+                SetRing(helper, current.Extra);
+            }
+        }
+
         // The four helpers can persist after the mechanic without a status-loss packet (replays and
         // live packet loss both do this). If no pulse has refreshed a ring for a while, it is stale
         // and must not remain drawn until the next mechanic.
@@ -159,12 +171,17 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
             || status.ID != (uint)SID.AreaOfInfluenceUp || status.Extra is < 1 or > 7)
             return;
 
-        var outer = status.Extra * 2.5f;
-        AOEShape shape = status.Extra == 1 ? new AOEShapeCircle(outer) : new AOEShapeDonut(outer - 2.5f, outer);
+        SetRing(actor, status.Extra);
+    }
+
+    private void SetRing(Actor actor, int extra)
+    {
+        var outer = extra * 2.5f;
+        AOEShape shape = extra == 1 ? new AOEShapeCircle(outer) : new AOEShapeDonut(outer - 2.5f, outer);
         // Visual only (risky: false); avoidance is handled by AddAIHints above.
         _pending[actor.InstanceID] = new(shape, actor.Position, color: Colors.Danger, risky: false,
             activation: WorldState.FutureTime(0.3f), actorID: actor.InstanceID, shapeDistance: shape.Distance(actor.Position, default));
-        _extra[actor.InstanceID] = status.Extra;
+        _extra[actor.InstanceID] = extra;
     }
 
     public override void OnStatusLose(Actor actor, ref ActorStatus status)
@@ -216,7 +233,7 @@ sealed class ChargeDashes(BossModule module) : Components.GenericAOEs(module)
 {
     private const float HalfWidth = 5f;
     private const float MinDashStep = 0.25f; // ~100y/s at 100Hz replay / ~1.7y per 60Hz frame; walks stay well below
-    private const double DashLifetime = 1.5d;
+    private const double DashLifetime = 0.4d;
     private readonly List<AOEInstance> _segments = [];
     private readonly List<AOEInstance> _displayed = [with(32)];
     private WPos _lastPosition;
