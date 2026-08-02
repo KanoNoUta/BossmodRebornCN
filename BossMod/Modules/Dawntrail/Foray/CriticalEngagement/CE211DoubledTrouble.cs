@@ -38,7 +38,7 @@ public enum AID : uint
     GarroteCancel = 0xB7E2, // HairBinding->self, no cast, cancellation/death event
     HairShearsVisual = 0xB7E3, // boss->self, 5.0s cast, visual
     HairShearsCircle = 0xB7E4, // helper->self, 5.0s cast, 10y circle
-    HairShearsLine = 0xB7E5, // helper->self, 5.0s cast, 60y long 4y wide rect
+    HairShearsLine = 0xB7E5, // helper->self, 5.0s cast, 60y long 4y wide cross
     MaliciousWeaveShort = 0xB7E6, // HairBinding->self, 1.0s cast, 6y circle and draw-in
     AuraBurstVisual = 0xB7E7, // boss->self, 5.0s cast, raidwide visual
     AuraBurst = 0xB7E8, // three helpers, no cast, raidwide damage
@@ -57,7 +57,10 @@ sealed class CalofisteriAOEs(BossModule module) : ReplayValidatedCastAOEs(module
 {
     private static readonly AOEShapeCircle SixYalms = new(6f);
     private static readonly AOEShapeCircle HairShearsCircle = new(10f);
-    private static readonly AOEShapeRect HairShearsLine = new(60f, 2f, 60f, 90f.Degrees());
+    // Official sheet marks B7E5 as a 60y cross; replays confirm both arms: each helper fires the
+    // same AID at two rotations 45 deg apart, and hits land along the cast direction (|perp|<=2y)
+    // as well as perpendicular to it (|proj|<=2y), so a 4y-wide cross matches the kill points.
+    private static readonly AOEShapeCross HairShearsLine = new(60f, 2f);
 
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
@@ -291,10 +294,10 @@ sealed class MaliciousWeavePulls(BossModule module) : Components.SimpleKnockback
 
 // Hair Shears first resolves B7E5, then B9EF pulls each player hit by that line to its source about
 // 1.08 seconds later. The pull uses separate helpers, so resolve it by origin+rotation rather than
-// helper instance id.
+// helper instance id. The affected shape is the same 4y-wide cross as the damaging AOE.
 sealed class HairShearsPulls(BossModule module) : Components.GenericKnockback(module)
 {
-    private static readonly AOEShapeRect Shape = new(60f, 2f, 60f, 90f.Degrees());
+    private static readonly AOEShapeCross Shape = new(60f, 2f);
     private readonly List<Knockback> _pulls = [with(8)];
     private readonly HashSet<uint> _seenGlobalSequences = [];
 

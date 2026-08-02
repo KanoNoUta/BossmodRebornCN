@@ -22,7 +22,7 @@ public enum AID : uint
     CauterizeVisual = 0xBC88, // boss->self, 6.0s cast, visual
     Cauterize = 0xBC89, // helper->self, 7.0s cast, range 40 width 10 rect
     CauterizeEnd = 0xBC8A, // boss->self, no cast, model-state reset
-    Catching = 0xBC8B, // zombie gas->self, no cast, range 30 width 10 rect
+    Catching = 0xBC8B, // zombie gas->self, no cast, range 30 width 10 rect (never casted in replays -> not previewable, architecture limitation)
     NecrohazeSweep = 0xBC8C, // moving helpers->location, repeated range 5 circles
     NecrohazeCenter = 0xBC8D, // center helper->self, repeated range 5 circle
     BreathInThreesLong = 0xBC8E, // boss->self, 5.0s cast, range 60 120-degree cone
@@ -54,6 +54,9 @@ sealed class CursedResurgenceAOEs(BossModule module) : ReplayValidatedCastAOEs(m
     private static readonly AOEShapeCone SnakingBreath = new(60f, 135f.Degrees());
     private static readonly AOEShapeCircle GraveMold = new(8f);
     private static readonly AOEShapeRect Cauterize = new(40f, 5f);
+    // Catching (BC8B) has no cast-start in any replay (13 effects, 0 casts): the zombie-gas sweep
+    // cannot be previewed by ReplayValidatedCastAOEs. Replay kill points span proj -22..+22y with
+    // |perp|<=5y from the gas origin, matching a 30y x 10y rect - kept as documentation only.
     private static readonly AOEShapeCircle Necrohaze = new(5f);
 
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch

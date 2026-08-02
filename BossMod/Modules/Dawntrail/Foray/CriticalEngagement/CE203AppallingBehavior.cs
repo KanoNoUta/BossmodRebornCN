@@ -141,11 +141,12 @@ sealed class AppallingAOEs(BossModule module) : Components.GenericAOEs(module)
     }
 }
 
-// C26B is the persistent electric fence at the arena edge: the only clean boundary hit is 20.1y
-// from center and the walkable area is a 20y circle, so mark the edge with a thin danger ring.
+// C26B is the persistent electric fence at the arena edge. The official Action sheet (0xC26B,
+// eff=10 donut, xAxis=25) puts the outer kill ring at 25y; keep the inner edge at the 20y
+// walkable circle so the danger band sits exactly on the fence.
 sealed class ElectricBoundary(BossModule module) : Components.GenericAOEs(module)
 {
-    private static readonly AOEShapeDonut Shape = new(19.5f, 21f);
+    private static readonly AOEShapeDonut Shape = new(19.5f, 25f);
     private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;

@@ -40,6 +40,11 @@ public enum AID : uint
     PoisonRain = 0xB880, // helper, no cast, 毒雨, raidwide damage
 
     SpitVenom = 0xB86E, // clone (0x4BCC), no cast, 分泌毒液, low-priority spit visual
+    // SpitVenom never cast-starts in replays (353 effects, 0 casts): it fires during the venom
+    // phase while the clone stands at the arena center. Kill points sit 24.8-28.7y from center
+    // (r25.2/25.5 N, r28.5 SW, r28.7 S), matching the official donut xAxis=30. The inner radius
+    // is unknown (omen_id=0, no Omen path) and the action cannot be previewed without a cast
+    // packet - documented architecture limitation, no component possible.
     SecreteVenomVisualA = 0xB86F, // boss->self, no cast, 分泌毒液 visual
     SecreteVenomVisualB = 0xC2DD // boss->self, no cast, 分泌毒液 visual
 }
@@ -51,6 +56,8 @@ sealed class ManyMouthsAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
     // 52y long / 10y wide line, centered on the caster (extends front and back).
     private static readonly AOEShapeRect CentralLine = new(26f, 5f, 26f);
     // Side whip is a pair of opposing 135-degree cones; the safe gap is the narrow front/back sliver.
+    // Replay-verified: B875 hits span +18..+161 deg from facing (C241 the mirrored -138..-16),
+    // i.e. a 135-degree cone - the official sheet's fan180 Omen is not representative here.
     private static readonly AOEShapeCone Whip = new(26f, 67.5f.Degrees());
     // Poison mist fills 3 of the 4 quadrants with 90-degree cones (45-degree half-angle).
     private static readonly AOEShapeCone Mist = new(30f, 45f.Degrees());
@@ -182,7 +189,7 @@ sealed class ManyMouthsToFeedStates : StateMachineBuilder
     GroupID = 1093u,
     NameID = 49u,
     SortOrder = 14)]
-public sealed class ManyMouthsToFeed(WorldState ws, Actor primary) : BossModule(ws, primary, new(-870f, -560f), new ArenaBoundsCircle(20f))
+public sealed class ManyMouthsToFeed(WorldState ws, Actor primary) : BossModule(ws, primary, new(-870f, -560f), new ArenaBoundsCircle(30f))
 {
     protected override void DrawEnemies(int pcSlot, Actor pc)
     {

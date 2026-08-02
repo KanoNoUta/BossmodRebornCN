@@ -41,7 +41,7 @@ public enum AID : uint
     ShapeshiftingSupercellResolve = 0xBCE6,
     ShapeshiftingSupercellConeShort = 0xBCE7, // helper->self, 1.5s cast, range 60 90-degree cone
     ShapeshiftingSupercellCircle = 0xBCE8, // helper->self, 6.0s cast, range 8 circle
-    ShapeshiftingSupercellDonutInner = 0xBCE9, // helper->self, 6.0s cast, range 10-16 donut
+    ShapeshiftingSupercellDonutInner = 0xBCE9, // helper->self, 6.0s cast, range 10-20 donut
     ShapeshiftingSupercellDonutOuter = 0xBCEA, // helper->self, 6.0s cast, range 16-30 donut
     ShapeshiftingSupercellExtraCircle = 0xC64F, // helper->self, 6.0s cast, range 8 circle
     MadeMagicVisual = 0xBCEB, // boss->self, 4.0s cast, visual
@@ -59,11 +59,11 @@ public enum SID : uint
     AreaOfInfluenceUp = 1909 // Made Magic helper, extra 1-7; circle radius = extra * 2.5y
 }
 
-// The real arena is a 25y circle (player p99.9 radius 24.8, boundary hit at 24.6, charge targets at
-// 25), so mark the persistent electric fence with a thin ring at the edge instead of a 20-30 donut.
+// The official Action sheet (0xBCEF, eff=10 donut, xAxis=30) puts the persistent electric fence
+// outer kill ring at 30y; the walkable circle is 25y, so the danger band covers 25-30.
 sealed class LethalBoundary(BossModule module) : Components.GenericAOEs(module)
 {
-    private static readonly AOEShapeDonut Shape = new(24.5f, 25.5f);
+    private static readonly AOEShapeDonut Shape = new(24.5f, 30f);
     private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
@@ -80,7 +80,7 @@ sealed class MorphingMageAOEs(BossModule module) : ReplayValidatedCastAOEs(modul
     private static readonly AOEShapeDonut CyclonicRing = new(10f, 30f);
     private static readonly AOEShapeCone SupercellCone = new(60f, 45f.Degrees());
     private static readonly AOEShapeCircle SupercellCircle = new(8f);
-    private static readonly AOEShapeDonut SupercellInner = new(10f, 16f);
+    private static readonly AOEShapeDonut SupercellInner = new(10f, 20f);
     private static readonly AOEShapeDonut SupercellOuter = new(16f, 30f);
     private static readonly AOEShapeCross CycloneCross = new(60f, 8f);
 
