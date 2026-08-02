@@ -106,7 +106,10 @@ sealed class DiminutiveDualcast(BossModule module) : ReplayValidatedCastAOEs(mod
     private static readonly AOEShapeCircle Fire = new(14.0f);
 
     protected override int MaxDisplayed => 4;
-    protected override double RiskyActivationWindow => 0.2d;
+    // 6s cast with a 14y circle; the old 0.2s window made automation react only at the last
+    // instant and eat the circle (replay: AI stood 8.8y inside a 14y fire). Keep the whole cast
+    // forbidden so pathing starts leaving immediately.
+    protected override double RiskyActivationWindow => 1.5d;
 
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch {
         (uint)AID.TinyBlizzardIII => new(Blizzard),
@@ -118,7 +121,7 @@ sealed class DiminutiveDualcast(BossModule module) : ReplayValidatedCastAOEs(mod
 sealed class TinyMeteor(BossModule module) : ReplayValidatedCastAOEs(module) {
     private static readonly AOEShapeCircle Shape = new(6.0f);
 
-    protected override double RiskyActivationWindow => 0.2d;
+    protected override double RiskyActivationWindow => 0.8d;
 
     protected override AOEConfig? ConfigFor(uint actionID) => actionID == (uint)AID.TinyMeteor ? new(Shape, true) : null;
 }
@@ -189,9 +192,14 @@ sealed class Comet(BossModule module) : BossComponent(module) {
             return;
         }
 
+        // The comet's nominal cast reads ~60s but it detonates far sooner once tethered (replay:
+        // cast start +20s). The blast is a 60y circle covering the whole r20 arena, so the only
+        // counter is killing the tethered comet; outline the blast radius around the kill target
+        // so players see how urgent it is to focus it down.
         foreach (var comet in comets.Values) {
             if (comet.Tethers == maxTethers) {
                 Arena.ZoneCircleOutline(comet.Actor.Position, 2.0f, Colors.Safe, 2.0f);
+                Arena.ZoneCircleOutline(comet.Actor.Position, 60.0f, Colors.Danger, 1.0f);
             }
         }
     }
@@ -764,7 +772,9 @@ sealed class FlareCombo(BossModule module) : Components.GenericAOEs(module) {
 
         var upcoming = timeline.Upcoming(2);
         if (upcoming.Count != 0) {
-            var imminentDeadline = upcoming[0].Activation.AddSeconds(0.2d);
+            // Flare resolves as a 18y circle; automation needs the full remaining cast to move out
+            // (replay: AI was clipped at 17.8y in the 18y radius). Mark risky well before resolve.
+            var imminentDeadline = upcoming[0].Activation.AddSeconds(1.0d);
             foreach (var entry in upcoming) {
                 if (entry.Type == OrbPairTimeline.Kind.Flare) {
                     var imminent = entry.Activation <= imminentDeadline;
