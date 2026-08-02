@@ -105,16 +105,14 @@ sealed class MorphingMageAOEs(BossModule module) : ReplayValidatedCastAOEs(modul
 }
 
 // Made Magic creates four fixed helpers 7.8y from center (cardinal on one cast, diagonal on the
-// next). They pulse every ~0.6s while status 1909 grows from extra 1 through 7; each pulse is a
-// thin expanding ring whose edge sits at extra*2.5y (verified in replay: hits only ever land on
-// the 2.5y band at the current radius, never inside). The wave stops at extra 7 = 17.5y.
+// next). Status 1909 grows from extra 1 through 7; the whole circle out to extra*2.5y is dangerous
+// on every pulse (replay: a player standing 8-10y from a helper at extra 7 / 17.5y max was still
+// hit), so both the drawn warning and the AI forbidden zone must be a filled circle, not a thin
+// ring. The wave stops at extra 7 = 17.5y.
 //
-// The drawn shape stays the accurate thin ring so a human sees the real wave. The AI hint, however,
-// cannot reliably surf four simultaneous rings, so it uses a filled circle out to the wave's
-// (anticipated) radius, capped at the 17.5y maximum, around every active helper. The union of four
-// 17.5y circles still leaves the four arena-edge pockets that sit >20y from every helper (the exact
-// spots survivors stand on), so the AI is parked in a pocket that is safe for the whole sequence and
-// never has to cross a ring - guaranteeing it is never clipped by the poison.
+// The union of four 17.5y circles still leaves the four arena-edge pockets that sit >20y from every
+// helper (the exact spots survivors stand on), so the AI is parked in a pocket that is safe for the
+// whole sequence and never has to cross a circle - guaranteeing it is never clipped by the poison.
 sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
 {
     private const float MaxRadius = 17.5f; // extra 7 * 2.5
@@ -177,8 +175,9 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
     private void SetRing(Actor actor, int extra)
     {
         var outer = extra * 2.5f;
-        AOEShape shape = extra == 1 ? new AOEShapeCircle(outer) : new AOEShapeDonut(outer - 2.5f, outer);
-        // Visual only (risky: false); avoidance is handled by AddAIHints above.
+        // Whole circle is lethal (see comment above); AddAIHints additionally fills the circle so
+        // automation treats the swept area as forbidden, not just the currently drawn edge.
+        AOEShape shape = new AOEShapeCircle(outer);
         _pending[actor.InstanceID] = new(shape, actor.Position, color: Colors.Danger, risky: false,
             activation: WorldState.FutureTime(0.3f), actorID: actor.InstanceID, shapeDistance: shape.Distance(actor.Position, default));
         _extra[actor.InstanceID] = extra;

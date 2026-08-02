@@ -82,10 +82,20 @@ sealed class DarkIV(BossModule module) : Components.RaidwideCast(module, (uint)A
 
 sealed class ElectricBoundary(BossModule module) : Components.GenericAOEs(module)
 {
+    // The fence kills at ~24.4y from center (replay death point) while the arena is 24.5. Keep the
+    // drawn line thin for readability, but forbid the outer two yalms for automation so the
+    // pathfinder never hugs the kill line while dodging the triple Gloom Current lanes.
     private static readonly AOEShapeRect Shape = new(24.5f, 0.75f, 24.5f);
+    private static readonly AOEShapeRect AIShape = new(24.5f, 1.5f, 24.5f);
     private readonly AOEInstance[] _aoes = Build(module.Arena.Center);
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoes;
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        foreach (var aoe in _aoes)
+            hints.AddForbiddenZone(AIShape.Distance(aoe.Origin, aoe.Rotation));
+    }
 
     private static AOEInstance[] Build(WPos center)
     {
@@ -94,8 +104,10 @@ sealed class ElectricBoundary(BossModule module) : Components.GenericAOEs(module
         {
             var normal = (i * 90f).Degrees().ToDirection();
             var rotation = Angle.FromDirection(normal.OrthoL());
+            // Visual line center sits on the kill line; the wider AI rect keeps its outer edge at
+            // the arena boundary while pushing the inner edge in to 22.25y.
             var origin = center + 23.75f * normal;
-            result[i] = new(Shape, origin, rotation, color: Colors.Danger, shapeDistance: Shape.Distance(origin, rotation));
+            result[i] = new(Shape, origin, rotation, color: Colors.Danger, risky: false, shapeDistance: Shape.Distance(origin, rotation));
         }
         return result;
     }
