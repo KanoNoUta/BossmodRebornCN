@@ -82,9 +82,8 @@ sealed class DarkIV(BossModule module) : Components.RaidwideCast(module, (uint)A
 
 sealed class ElectricBoundary(BossModule module) : Components.GenericAOEs(module)
 {
-    // The fence kills at ~24.4y from center (replay death point) while the arena is 24.5. Keep the
-    // drawn line thin for readability, but forbid the outer two yalms for automation so the
-    // pathfinder never hugs the kill line while dodging the triple Gloom Current lanes.
+    // ARR BFD0 deaths cluster at ~24.4y from center. Keep the visual strip narrow, but reserve
+    // the outer 2.25y for pathfinding so dodging circles and crosses cannot route into the fence.
     private static readonly AOEShapeRect Shape = new(24.5f, 0.75f, 24.5f);
     private static readonly AOEShapeRect AIShape = new(24.5f, 1.5f, 24.5f);
     private readonly AOEInstance[] _aoes = Build(module.Arena.Center);
@@ -104,8 +103,6 @@ sealed class ElectricBoundary(BossModule module) : Components.GenericAOEs(module
         {
             var normal = (i * 90f).Degrees().ToDirection();
             var rotation = Angle.FromDirection(normal.OrthoL());
-            // Visual line center sits on the kill line; the wider AI rect keeps its outer edge at
-            // the arena boundary while pushing the inner edge in to 22.25y.
             var origin = center + 23.75f * normal;
             result[i] = new(Shape, origin, rotation, color: Colors.Danger, risky: false, shapeDistance: Shape.Distance(origin, rotation));
         }
@@ -136,6 +133,4 @@ sealed class WhatGoesAroundStates : StateMachineBuilder
     GroupID = 1093u,
     NameID = 57u,
     SortOrder = 8)]
-// The electric fence is square: arena-control kills cluster at |z| ~= 24 and players reach the
-// square rim, so use a 24.5y square instead of the old 20y circle that clipped the lane mechanics.
 public sealed class WhatGoesAround(WorldState ws, Actor primary) : BossModule(ws, primary, new(224f, -860f), new ArenaBoundsSquare(24.5f));

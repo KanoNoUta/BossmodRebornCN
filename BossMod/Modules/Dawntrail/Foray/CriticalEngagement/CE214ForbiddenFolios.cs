@@ -351,7 +351,8 @@ sealed class KnowledgeSectors(BossModule module) : Components.GenericAOEs(module
             return;
 
         var existing = _pending.FirstOrDefault(sector => sector.Kind == config.Kind
-            && Math.Abs((sector.Activation - activation).TotalSeconds) <= 0.25d);
+            && Math.Abs((sector.Activation - activation).TotalSeconds) <= 0.25d
+            && sector.Rotation.AlmostEqual(spell.Rotation, Angle.DegToRad));
         if (existing != null)
         {
             existing.Casters.Add(caster.InstanceID);

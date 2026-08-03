@@ -16,7 +16,7 @@ public enum AID : uint
 {
     IdleVisual = 0xB949, // boss->event target, no effects
     AutoAttack = 0xB94A, // boss->player, no cast, single-target
-    WindBoundary = 0xB94B, // anchor, persistent 20-30y outer deathwall
+    WindBoundary = 0xB94B, // anchor, persistent outer deathwall; ARR player-center kills start at ~23y
     HurricaneVisual = 0xB94C,
     HurricaneKnockback = 0xB94D, // 5y away knockback
     RendingWindVisual = 0xB94E,
@@ -37,15 +37,9 @@ public enum AID : uint
 
 sealed class WindBoundary(BossModule module) : Components.GenericAOEs(module)
 {
-    // The wall is lethal from 19y outward; draw it accurately for the human overlay but mark it
-    // non-risky so the AI zone below can use a tighter inner radius.
-    private static readonly AOEShapeDonut Visual = new(19f, 30f);
-    // Give the AI a 2y buffer inside the true wall. The rotating WindBloom ice-flowers are 13y
-    // circles emitted from the 16y ring, so the only safe pocket is near dead center; without a
-    // buffer, squeezing away from a bloom can round the destination onto the 19y deathwall. Keeping
-    // the AI at or inside 17y guarantees it never clips the wall while dodging blooms.
-    private static readonly AOEShapeDonut Forbidden = new(17f, 30f);
-    private readonly AOEInstance[] _aoe = [new(Visual, module.Arena.Center, risky: false)];
+    private static readonly AOEShapeDonut Visual = new(23f, 30f);
+    private static readonly AOEShapeDonut Forbidden = new(22f, 30f);
+    private readonly AOEInstance[] _aoe = [new(Visual, module.Arena.Center)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
 
@@ -122,7 +116,10 @@ sealed class GustKnockback(BossModule module) : Components.GenericKnockback(modu
 {
     private static readonly AOEShapeRect Shape = new(60f, 30f);
     private const float Distance = 24f;
-    private const float SafeRadius = 19f;
+    private const float SafeRadius = 22f;
+    private const float LethalRadius = 23f;
+    private const float PreferredStartDistance = 20.5f;
+    private const float PreferredStartRadius = 2f;
     // Replay event timing is consistently about 0.60s after the helper cast finishes. Using the
     // old 1.05s estimate scheduled the safe-edge constraint roughly 0.4s after the real knockback.
     private const double HitDelay = 0.60d;
@@ -137,7 +134,13 @@ sealed class GustKnockback(BossModule module) : Components.GenericKnockback(modu
     public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
     {
         foreach (var kb in _casters)
-            hints.AddForbiddenZone(new SDKnockbackInCircleFixedDirection(Arena.Center, Distance * kb.Direction.ToDirection(), SafeRadius), kb.Activation);
+        {
+            var displacement = Distance * kb.Direction.ToDirection();
+            var center = Arena.Center;
+            hints.AddForbiddenZone(new SDKnockbackInCircleFixedDirection(center, displacement, SafeRadius), kb.Activation);
+            var preferredStart = center - PreferredStartDistance * kb.Direction.ToDirection();
+            hints.GoalZones.Add(position => position.InCircle(preferredStart, PreferredStartRadius) ? 5f : 0f);
+        }
     }
 
     public override void AddHints(int slot, Actor actor, TextHints hints)
@@ -150,6 +153,8 @@ sealed class GustKnockback(BossModule module) : Components.GenericKnockback(modu
         if (tank != null && !tank.IsDeadOrDestroyed && (tank.Position - Module.Arena.Center).Length() < 5f)
             hints.Add("Main tank in the middle - the gust will push the whole party out of bounds!");
     }
+
+    public override bool DestinationUnsafe(int slot, Actor actor, WPos pos) => !pos.InCircle(Arena.Center, LethalRadius);
 
     public override void Update() => PruneExpired();
 
@@ -207,4 +212,4 @@ sealed class IslandKidnapperStates : StateMachineBuilder
     GroupID = 1093u,
     NameID = 61u,
     SortOrder = 6)]
-public sealed class IslandKidnapper(WorldState ws, Actor primary) : BossModule(ws, primary, new(-150f, -860f), new ArenaBoundsCircle(20f));
+public sealed class IslandKidnapper(WorldState ws, Actor primary) : BossModule(ws, primary, new(-150f, -860f), new ArenaBoundsCircle(23.5f));

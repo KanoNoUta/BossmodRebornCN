@@ -7,7 +7,14 @@ public enum OID : uint
     Boss = 0x4D8F, // R3.0, BNpcName 14714, Pallmagia
     Pallkeeper = 0x4D90, // BNpcName 14715
     Anchor = 0x4D91, // non-targetable Pallmagia controller
-    Helper = 0x233C
+    Helper = 0x233C,
+    RouletteInnerGuide = 0x1EC02B, // event object; EAnim selects the two opposite inner sectors
+    RouletteOuterGuide = 0x1EC02C // event object; EAnim selects the two opposite outer sectors
+}
+
+public enum TetherID : uint
+{
+    EsotericOrder = 0xE // Pallkeeper -> boss, emitted in execution order during C26D/C26E
 }
 
 public enum AID : uint
@@ -55,7 +62,7 @@ public enum AID : uint
 sealed class AppallingAOEs(BossModule module) : Components.GenericAOEs(module)
 {
     private readonly record struct AOEConfig(AOEShape Shape, bool LocationTargeted = false);
-    private sealed record Pending(uint ActionID, ulong ActorID, AOEShape Shape, WPos Origin, Angle Rotation, DateTime Activation, bool FollowCaster);
+    private sealed record Pending(uint ActionID, ulong ActorID, AOEShape? Shape, WPos Origin, Angle Rotation, DateTime Activation, bool FollowCaster, bool PredictedInstruction = false, int InstructionSlot = -1);
 
     private static readonly AOEShapeCone BadBreath = new(50f, 50f.Degrees());
     private static readonly AOEShapeCircle PlaincrackerLarge = new(30f);
@@ -66,6 +73,12 @@ sealed class AppallingAOEs(BossModule module) : Components.GenericAOEs(module)
     private readonly List<Pending> _pending = [];
     private readonly List<AOEInstance> _displayed = [];
     private readonly HashSet<uint> _seenSequences = [];
+    private readonly HashSet<ulong> _instructionSources = [];
+    // C26E does not identify its first shape. Keep its ordered tether slots hidden until the first
+    // helper cast supplies the polarity, then calibrate all four slots without losing swap targets.
+    private DateTime _instructionFirstActivation;
+    private bool? _instructionCircleFirst;
+    private int _instructionTethers;
 
     private static AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
@@ -82,7 +95,7 @@ sealed class AppallingAOEs(BossModule module) : Components.GenericAOEs(module)
     {
         Prune();
         _displayed.Clear();
-        var ordered = _pending.OrderBy(p => p.Activation).ToArray();
+        var ordered = _pending.Where(p => p.Shape != null).OrderBy(p => p.Activation).ToArray();
         // Magic Hammer resolves as three one-second-spaced batches. If only the current batch is
         // risky, AI picks a technically safe point that is already covered by the second batch and
         // cannot leave the 8y circle in time. Keep the current and next batch forbidden so it plans
@@ -91,25 +104,52 @@ sealed class AppallingAOEs(BossModule module) : Components.GenericAOEs(module)
         var riskyDeadline = ordered.Length > 0 ? ordered[0].Activation.AddSeconds(riskWindow) : DateTime.MinValue;
         foreach (var pending in ordered)
         {
+            var shape = pending.Shape!;
             var source = pending.FollowCaster ? WorldState.Actors.Find(pending.ActorID) : null;
             var origin = source?.Position ?? pending.Origin;
             var rotation = source?.Rotation ?? pending.Rotation;
             var imminent = pending.Activation <= riskyDeadline;
-            _displayed.Add(new(pending.Shape, origin, rotation, pending.Activation,
-                imminent ? Colors.Danger : Colors.AOE, imminent, pending.ActorID, pending.Shape.Distance(origin, rotation)));
+            _displayed.Add(new(shape, origin, rotation, pending.Activation,
+                imminent ? Colors.Danger : Colors.AOE, imminent, pending.ActorID, shape.Distance(origin, rotation)));
         }
         return CollectionsMarshal.AsSpan(_displayed);
+    }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        foreach (ref readonly var aoe in ActiveAOEs(slot, actor))
+        {
+            // Hammer and learned instructions are ordered movement puzzles. Later previews are not
+            // currently dangerous for display purposes, but pathfinding needs their activation
+            // times now or it can choose a dead-end safe spot for the preceding hit.
+            if (aoe.Risky || ReferenceEquals(aoe.Shape, Hammer) || ReferenceEquals(aoe.Shape, BadBreath) || ReferenceEquals(aoe.Shape, PlaincrackerLarge))
+                hints.AddForbiddenZone(aoe.ShapeDistance ?? aoe.Shape.Distance(aoe.Origin, aoe.Rotation), aoe.Activation);
+        }
     }
 
     public override void Update() => Prune();
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
+        if (spell.Action.ID is (uint)AID.EsotericInstruction or (uint)AID.EsotericInstructionReverse)
+        {
+            _pending.RemoveAll(p => p.InstructionSlot >= 0);
+            _instructionSources.Clear();
+            _instructionTethers = 0;
+            var reverse = spell.Action.ID == (uint)AID.EsotericInstructionReverse;
+            _instructionCircleFirst = reverse ? null : true;
+            _instructionFirstActivation = Module.CastFinishAt(spell, reverse ? 12.7d : 6.3d);
+            return;
+        }
+
         if (ConfigFor(spell.Action.ID) is not { } config || spell.EventHappened)
             return;
 
         var activation = Module.CastFinishAt(spell);
         if (activation <= WorldState.CurrentTime)
+            return;
+
+        if (spell.Action.ID is (uint)AID.BadBreathInstruction or (uint)AID.PlaincrackerInstruction && UpdateInstructionPrediction(caster, spell, config.Shape, activation))
             return;
 
         _pending.RemoveAll(p => p.ActionID == spell.Action.ID && p.ActorID == caster.InstanceID);
@@ -119,17 +159,43 @@ sealed class AppallingAOEs(BossModule module) : Components.GenericAOEs(module)
 
     public override void OnCastFinished(Actor caster, ActorCastInfo spell)
     {
-        if (spell.EventHappened)
+        if (spell.EventHappened && spell.Action.ID is not (uint)AID.BadBreathInstruction and not (uint)AID.PlaincrackerInstruction)
             _pending.RemoveAll(p => p.ActionID == spell.Action.ID && p.ActorID == caster.InstanceID);
     }
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell)
     {
+        if (spell.Action.ID is (uint)AID.SwapOpposites or (uint)AID.SwapClockwise or (uint)AID.SwapCounterclockwise)
+        {
+            UpdateInstructionDestination(caster, spell);
+            return;
+        }
+
         if (ConfigFor(spell.Action.ID) == null || spell.GlobalSequence != 0 && !_seenSequences.Add(spell.GlobalSequence))
             return;
 
-        _pending.RemoveAll(p => p.ActionID == spell.Action.ID && p.ActorID == caster.InstanceID);
+        var removed = _pending.RemoveAll(p => p.ActionID == spell.Action.ID && p.ActorID == caster.InstanceID);
+        if (removed == 0 && spell.Action.ID is (uint)AID.BadBreathInstruction or (uint)AID.PlaincrackerInstruction)
+        {
+            var index = EarliestInstructionSlot();
+            if (index >= 0)
+                _pending.RemoveAt(index);
+        }
         ++NumCasts;
+    }
+
+    public override void OnTethered(Actor source, in ActorTetherInfo tether)
+    {
+        if (tether.ID != (uint)TetherID.EsotericOrder || source.OID != (uint)OID.Pallkeeper || _instructionFirstActivation == default
+            || _instructionTethers >= 4 || !_instructionSources.Add(source.InstanceID))
+            return;
+
+        var slot = _instructionTethers++;
+        var circle = _instructionCircleFirst is { } circleFirst && circleFirst == (slot % 2 == 0);
+        var actionID = _instructionCircleFirst == null ? 0 : circle ? (uint)AID.PlaincrackerInstruction : (uint)AID.BadBreathInstruction;
+        AOEShape? shape = _instructionCircleFirst == null ? null : circle ? PlaincrackerLarge : BadBreath;
+        var activation = _instructionFirstActivation.AddSeconds(4.5d * slot);
+        _pending.Add(new(actionID, source.InstanceID, shape, source.Position, source.Rotation, activation, true, true, slot));
     }
 
     public override void OnActorDestroyed(Actor actor) => _pending.RemoveAll(p => p.ActorID == actor.InstanceID);
@@ -137,7 +203,79 @@ sealed class AppallingAOEs(BossModule module) : Components.GenericAOEs(module)
     private void Prune()
     {
         var now = WorldState.CurrentTime;
-        _pending.RemoveAll(p => now > p.Activation.AddSeconds(1d));
+        _pending.RemoveAll(p => now > p.Activation.AddSeconds(2d));
+    }
+
+    private bool UpdateInstructionPrediction(Actor caster, ActorCastInfo spell, AOEShape shape, DateTime activation)
+    {
+        if (_instructionCircleFirst == null)
+            CalibrateInstruction(spell.Action.ID == (uint)AID.PlaincrackerInstruction, activation);
+
+        var index = EarliestInstructionSlot(predictedOnly: true);
+        if (index < 0)
+            return false;
+
+        _pending[index] = _pending[index] with
+        {
+            ActionID = spell.Action.ID,
+            ActorID = caster.InstanceID,
+            Shape = shape,
+            Origin = caster.Position,
+            Rotation = spell.Rotation,
+            Activation = activation,
+            FollowCaster = true,
+            PredictedInstruction = false
+        };
+        return true;
+    }
+
+    private void CalibrateInstruction(bool circleFirst, DateTime firstActivation)
+    {
+        _instructionCircleFirst = circleFirst;
+        _instructionFirstActivation = firstActivation;
+        for (var i = 0; i < _pending.Count; ++i)
+        {
+            var pending = _pending[i];
+            if (pending.InstructionSlot < 0)
+                continue;
+
+            var circle = circleFirst == (pending.InstructionSlot % 2 == 0);
+            _pending[i] = pending with
+            {
+                ActionID = circle ? (uint)AID.PlaincrackerInstruction : (uint)AID.BadBreathInstruction,
+                Shape = circle ? PlaincrackerLarge : BadBreath,
+                Activation = firstActivation.AddSeconds(4.5d * pending.InstructionSlot)
+            };
+        }
+    }
+
+    private void UpdateInstructionDestination(Actor caster, ActorCastEvent spell)
+    {
+        var index = _pending.FindIndex(p => p.PredictedInstruction && p.ActorID == caster.InstanceID);
+        if (index < 0)
+            return;
+
+        var distance = spell.Action.ID == (uint)AID.SwapOpposites ? 40f : 20f * MathF.Sqrt(2f);
+        var origin = caster.Position + distance * spell.Rotation.ToDirection();
+        _pending[index] = _pending[index] with
+        {
+            Origin = origin,
+            Rotation = Angle.FromDirection(Module.Arena.Center - origin),
+            FollowCaster = false
+        };
+    }
+
+    private int EarliestInstructionSlot(bool predictedOnly = false)
+    {
+        var result = -1;
+        for (var i = 0; i < _pending.Count; ++i)
+        {
+            var candidate = _pending[i];
+            if (candidate.InstructionSlot >= 0 && (!predictedOnly || candidate.PredictedInstruction)
+                && (result < 0 || candidate.Activation < _pending[result].Activation))
+                result = i;
+        }
+        return result;
     }
 }
 
@@ -170,6 +308,8 @@ sealed class DeathRouletteGrid(BossModule module) : Components.GenericAOEs(modul
     private readonly List<AOEInstance> _displayed = [];
     private readonly HashSet<uint> _seenSequences = [];
     private readonly Dictionary<ulong, Angle> _orientationBaseline = [];
+    private Angle? _innerDirection;
+    private Angle? _outerDirection;
     private DateTime _activation;
     private int _resolvedCells;
     private bool _armed;
@@ -182,6 +322,9 @@ sealed class DeathRouletteGrid(BossModule module) : Components.GenericAOEs(modul
         if (!_armed)
             return CollectionsMarshal.AsSpan(_displayed);
 
+        // The center cell is unconditional and must be available from the roulette cast even if
+        // one of the four sector helpers has not spawned/streamed in yet.
+        Add(CenterCell, default, true);
         var inner1 = Helper(37);
         var inner2 = Helper(38);
         var outer1 = Helper(39);
@@ -189,14 +332,23 @@ sealed class DeathRouletteGrid(BossModule module) : Components.GenericAOEs(modul
         if (inner1 == null || inner2 == null || outer1 == null || outer2 == null)
             return CollectionsMarshal.AsSpan(_displayed);
 
-        Add(CenterCell, default, true);
-        UpdateDirectionFreshness(inner1, inner2, outer1, outer2);
-        if (_directionsFresh)
+        if (_innerDirection is { } inner && _outerDirection is { } outer)
         {
-            Add(InnerCell, inner1.Rotation, true, inner1.InstanceID);
-            Add(InnerCell, inner2.Rotation, true, inner2.InstanceID);
-            Add(OuterCell, outer1.Rotation, true, outer1.InstanceID);
-            Add(OuterCell, outer2.Rotation, true, outer2.InstanceID);
+            Add(InnerCell, inner, true, inner1.InstanceID);
+            Add(InnerCell, inner + 180f.Degrees(), true, inner2.InstanceID);
+            Add(OuterCell, outer, true, outer1.InstanceID);
+            Add(OuterCell, outer + 180f.Degrees(), true, outer2.InstanceID);
+        }
+        else
+        {
+            UpdateDirectionFreshness(inner1, inner2, outer1, outer2);
+            if (_directionsFresh)
+            {
+                Add(InnerCell, inner1.Rotation, true, inner1.InstanceID);
+                Add(InnerCell, inner2.Rotation, true, inner2.InstanceID);
+                Add(OuterCell, outer1.Rotation, true, outer1.InstanceID);
+                Add(OuterCell, outer2.Rotation, true, outer2.InstanceID);
+            }
         }
         return CollectionsMarshal.AsSpan(_displayed);
     }
@@ -212,7 +364,30 @@ sealed class DeathRouletteGrid(BossModule module) : Components.GenericAOEs(modul
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
         if (spell.Action.ID == (uint)AID.Roulette && !spell.EventHappened)
-            Arm(Module.CastFinishAt(spell, 14.68f));
+            Arm(Module.CastFinishAt(spell, 14.38f));
+    }
+
+    public override void OnActorEAnim(Actor actor, uint state)
+    {
+        var p2 = state & 0xFFFF;
+        if (actor.OID == (uint)OID.RouletteInnerGuide)
+        {
+            _innerDirection = p2 switch
+            {
+                0x20 => actor.Rotation + 60f.Degrees(),
+                0x10 => actor.Rotation,
+                _ => _innerDirection
+            };
+        }
+        else if (actor.OID == (uint)OID.RouletteOuterGuide)
+        {
+            _outerDirection = p2 switch
+            {
+                0x10 => actor.Rotation - 45f.Degrees(),
+                0x20 => actor.Rotation - 90f.Degrees(),
+                _ => _outerDirection
+            };
+        }
     }
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell)
@@ -220,7 +395,7 @@ sealed class DeathRouletteGrid(BossModule module) : Components.GenericAOEs(modul
         if (spell.Action.ID == (uint)AID.Roulette)
         {
             if (!_armed)
-                Arm(WorldState.FutureTime(14.68d));
+                Arm(WorldState.FutureTime(14.38d));
             return;
         }
 
@@ -248,6 +423,8 @@ sealed class DeathRouletteGrid(BossModule module) : Components.GenericAOEs(modul
         _resolvedCells = 0;
         _seenSequences.Clear();
         _orientationBaseline.Clear();
+        _innerDirection = null;
+        _outerDirection = null;
         foreach (var offset in new ulong[] { 37, 38, 39, 40 })
             if (Helper(offset) is { } helper)
                 _orientationBaseline[helper.InstanceID] = helper.Rotation;
@@ -260,6 +437,8 @@ sealed class DeathRouletteGrid(BossModule module) : Components.GenericAOEs(modul
         _resolvedCells = 0;
         _displayed.Clear();
         _orientationBaseline.Clear();
+        _innerDirection = null;
+        _outerDirection = null;
         _directionsFresh = false;
     }
 
@@ -298,6 +477,7 @@ sealed class AppallingBehaviorStates : StateMachineBuilder
     StatesType = typeof(AppallingBehaviorStates),
     ObjectIDType = typeof(OID),
     ActionIDType = typeof(AID),
+    TetherIDType = typeof(TetherID),
     PrimaryActorOID = (uint)OID.Boss,
     Contributors = "KanoNoUta",
     Expansion = BossModuleInfo.Expansion.Dawntrail,

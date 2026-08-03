@@ -32,10 +32,8 @@ sealed class EvilSeerStates : StateMachineBuilder {
     public EvilSeerStates(BossModule module) : base(module) {
         TrivialPhase()
             .ActivateOnEnter<AllEyes>()
-            .ActivateOnEnter<SeeNoEvil>()
             .ActivateOnEnter<Jettatura>()
-            .ActivateOnEnter<ColdStare>()
-            .ActivateOnEnter<SinisterSight>();
+            .ActivateOnEnter<ColdStare>();
     }
 }
 

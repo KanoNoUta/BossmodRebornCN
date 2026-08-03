@@ -116,6 +116,7 @@ sealed class MorphingMageAOEs(BossModule module) : ReplayValidatedCastAOEs(modul
 sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
 {
     private const float MaxRadius = 17.5f; // extra 7 * 2.5
+    private static readonly AOEShapeCircle FinalSweep = new(MaxRadius);
     private readonly Dictionary<ulong, AOEInstance> _pending = [];
     private readonly Dictionary<ulong, int> _extra = [];
     private readonly List<AOEInstance> _displayed = new(4);
@@ -128,17 +129,14 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
         return CollectionsMarshal.AsSpan(_displayed);
     }
 
-    // Drive AI avoidance off filled circles instead of the drawn thin rings: forbid everything the
-    // wave has swept (plus one anticipated step to cover the status packet arriving after the pulse),
-    // capped at 17.5y so the four edge pockets stay open.
+    // Reserve the complete sweep as soon as the first growth status arrives. Expanding this hint
+    // pulse-by-pulse makes automation walk a few yalms after every hit; the final 17.5y footprint
+    // sends it to one of the four edge pockets in a single route. ActiveAOEs still draws only the
+    // current real radius, so the visual timing remains faithful to the mechanic.
     public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
     {
-        foreach (var (id, aoe) in _pending)
-        {
-            var radius = Math.Min((_extra.GetValueOrDefault(id) + 1) * 2.5f, MaxRadius);
-            if (radius > 0f)
-                hints.AddForbiddenZone(new AOEShapeCircle(radius), aoe.Origin);
-        }
+        foreach (var aoe in _pending.Values)
+            hints.AddForbiddenZone(FinalSweep, aoe.Origin);
     }
 
     public override void Update()
@@ -216,67 +214,73 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
 // stable, non-duplicated warning and starts one second before the helper cast bars.
 sealed class BlackenedRain(BossModule module) : Components.RaidwideCast(module, (uint)AID.BlackenedRainVisual);
 sealed class DarkDealing(BossModule module) : Components.SingleTargetDelayableCast(module, (uint)AID.DarkDealing);
-sealed class HellwardBound : Components.ChargeAOEs
-{
-    public HellwardBound(BossModule module) : base(module, (uint)AID.HellwardBound, 5f)
-    {
-        Color = Colors.Danger;
-    }
-}
-
-// The charge cast telegraphs only the first dash. After it resolves the boss dashes repeatedly
-// across the arena (replay: center -> SE corner -> west edge -> back east, each ~0.3s segment),
-// and those later segments carry damage too. Track the boss's fast movement and draw every dash
-// segment as a short-lived danger line so the whole multi-dash sequence is visible.
-sealed class ChargeDashes(BossModule module) : Components.GenericAOEs(module)
+// BCD7 only moves the boss from center to the cast location. The three damaging BCD8 dashes then
+// visit R90(p), -R90(p), and -p around arena center, where p is that first landing offset. Replays
+// expose the whole route from BCD7's target six seconds early, so draw the real lanes up front
+// instead of following the boss with post-hit movement trails.
+sealed class HellwardBound(BossModule module) : Components.GenericAOEs(module)
 {
     private const float HalfWidth = 5f;
-    private const float MinDashStep = 0.25f; // ~100y/s at 100Hz replay / ~1.7y per 60Hz frame; walks stay well below
-    private const double DashLifetime = 0.4d;
-    private readonly List<AOEInstance> _segments = [];
-    private readonly List<AOEInstance> _displayed = [with(32)];
-    private WPos _lastPosition;
-    private bool _hasLast;
+    private const double FirstDashDelay = 2.2d;
+    private const double DashInterval = 2.2d;
+    private const double FinalDashGrace = 0.9d;
+    private readonly List<AOEInstance> _lanes = new(3);
+    private readonly HashSet<uint> _seenHitSequences = [];
+    private DateTime _phaseExpires;
+
+    public bool DashPhaseActive => WorldState.CurrentTime <= _phaseExpires;
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
     {
-        PruneExpired();
-        _displayed.Clear();
-        _displayed.AddRange(_segments);
-        return CollectionsMarshal.AsSpan(_displayed);
+        if (WorldState.CurrentTime > _phaseExpires)
+            _lanes.Clear();
+
+        var lanes = CollectionsMarshal.AsSpan(_lanes);
+        for (var i = 0; i < lanes.Length; ++i)
+        {
+            lanes[i].Color = i == 0 ? Colors.Danger : default;
+            // AI must choose a pocket that survives the entire route instead of crossing a later
+            // lane while chasing the moving boss. Later lanes remain visually ordered by activation.
+            lanes[i].Risky = true;
+        }
+        return lanes;
     }
 
-    public override void Update()
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
-        var boss = Module.PrimaryActor;
-        if (boss.IsDeadOrDestroyed)
-        {
-            _segments.Clear();
-            _hasLast = false;
+        if (caster != Module.PrimaryActor || spell.Action.ID != (uint)AID.HellwardBound || spell.EventHappened)
             return;
-        }
 
-        var now = WorldState.CurrentTime;
-        if (_hasLast)
-        {
-            var delta = boss.Position - _lastPosition;
-            if (delta.LengthSq() > MinDashStep * MinDashStep)
-            {
-                var rotation = Angle.FromDirection(delta);
-                var shape = new AOEShapeRect(delta.Length(), HalfWidth);
-                _segments.Add(new(shape, _lastPosition, rotation, now, Colors.Danger, true, boss.InstanceID,
-                    shapeDistance: shape.Distance(_lastPosition, rotation)));
-            }
-        }
-        _lastPosition = boss.Position;
-        _hasLast = true;
-        PruneExpired();
+        _lanes.Clear();
+        _seenHitSequences.Clear();
+
+        var p = spell.LocXZ - Arena.Center;
+        var p90 = p.OrthoL();
+        WPos[] points = [Arena.Center + p, Arena.Center + p90, Arena.Center - p90, Arena.Center - p];
+        var firstActivation = Module.CastFinishAt(spell).AddSeconds(FirstDashDelay);
+        for (var i = 0; i < 3; ++i)
+            AddLane(points[i], points[i + 1], firstActivation.AddSeconds(i * DashInterval), caster.InstanceID);
+        _phaseExpires = firstActivation.AddSeconds(2d * DashInterval + FinalDashGrace);
     }
 
-    private void PruneExpired()
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
     {
-        var now = WorldState.CurrentTime;
-        _segments.RemoveAll(entry => now > entry.Activation.AddSeconds(DashLifetime));
+        if (caster != Module.PrimaryActor || spell.Action.ID != (uint)AID.HellwardBoundHit || !DashPhaseActive
+            || spell.GlobalSequence != 0 && !_seenHitSequences.Add(spell.GlobalSequence))
+            return;
+
+        if (_lanes.Count != 0)
+            _lanes.RemoveAt(0);
+        if (_lanes.Count == 0)
+            _phaseExpires = WorldState.FutureTime(FinalDashGrace);
+    }
+
+    private void AddLane(WPos start, WPos end, DateTime activation, ulong actorID)
+    {
+        var direction = end - start;
+        var rotation = Angle.FromDirection(direction);
+        var shape = new AOEShapeRect(direction.Length(), HalfWidth);
+        _lanes.Add(new(shape, start, rotation, activation, actorID: actorID, shapeDistance: shape.Distance(start, rotation)));
     }
 }
 
@@ -290,8 +294,7 @@ sealed class AcceptNoImitatorsStates : StateMachineBuilder
             .ActivateOnEnter<MadeMagic>()
             .ActivateOnEnter<BlackenedRain>()
             .ActivateOnEnter<DarkDealing>()
-            .ActivateOnEnter<HellwardBound>()
-            .ActivateOnEnter<ChargeDashes>();
+            .ActivateOnEnter<HellwardBound>();
     }
 }
 
@@ -309,4 +312,11 @@ sealed class AcceptNoImitatorsStates : StateMachineBuilder
     SortOrder = 9)]
 // Replay-verified 25y circular arena (players reach r24.8, the charge ends at r25 and the fence
 // kills at 24.6); the old 20y circle clipped the charge and misplaced the boundary drawing.
-public sealed class AcceptNoImitators(WorldState ws, Actor primary) : BossModule(ws, primary, new(500f, -310f), new ArenaBoundsCircle(25f));
+public sealed class AcceptNoImitators(WorldState ws, Actor primary) : BossModule(ws, primary, new(500f, -310f), new ArenaBoundsCircle(25f))
+{
+    protected override void CalculateModuleAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        if (FindComponent<HellwardBound>()?.DashPhaseActive == true)
+            hints.GoalZones.Add(AIHints.GoalProximity(Arena.Center, 20f, 5f));
+    }
+}

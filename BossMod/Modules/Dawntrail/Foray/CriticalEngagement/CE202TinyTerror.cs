@@ -105,17 +105,33 @@ sealed class DiminutiveDualcast(BossModule module) : ReplayValidatedCastAOEs(mod
     private static readonly AOEShapeCone Blizzard = new(40.0f, 30.0f.Degrees());
     private static readonly AOEShapeCircle Fire = new(14.0f);
 
-    protected override int MaxDisplayed => 4;
-    // 6s cast with a 14y circle; the old 0.2s window made automation react only at the last
-    // instant and eat the circle (replay: AI stood 8.8y inside a 14y fire). Keep the whole cast
-    // forbidden so pathing starts leaving immediately.
-    protected override double RiskyActivationWindow => 1.5d;
+    // A complete dualcast wave contains two groups of three cones plus one fire circle.
+    // All seven overlap before the first group resolves, so limiting the queue to four drops
+    // the second cone group entirely.
+    protected override int MaxDisplayed => 7;
+    // The sequence resolves as three cones, then the fire circle, then three more cones at roughly
+    // two-second intervals. Display all seven, but only mark the current cones plus the fire risky;
+    // otherwise both cone groups combine into a false whole-arena danger zone.
+    protected override double RiskyActivationWindow => 2.5d;
 
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch {
         (uint)AID.TinyBlizzardIII => new(Blizzard),
         (uint)AID.TinyFireIII => new(Fire),
         _ => null
     };
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints) {
+        foreach (ref readonly var aoe in ActiveAOEs(slot, actor)) {
+            if (!aoe.Risky) {
+                continue;
+            }
+
+            // BCBE is a 14y circle centered on the boss. Treat it as forbidden from cast start;
+            // otherwise pathfinding can enter it for uptime and schedule the escape too late.
+            var activation = ReferenceEquals(aoe.Shape, Fire) ? WorldState.CurrentTime : aoe.Activation;
+            hints.AddForbiddenZone(aoe.ShapeDistance ?? aoe.Shape.Distance(aoe.Origin, aoe.Rotation), activation);
+        }
+    }
 }
 
 sealed class TinyMeteor(BossModule module) : ReplayValidatedCastAOEs(module) {
@@ -207,6 +223,20 @@ sealed class Comet(BossModule module) : BossComponent(module) {
     public override void AddHints(int slot, Actor actor, TextHints hints) {
         if (MaxTetherCount() > 0) {
             hints.Add("Attack a comet with a green circle around it!");
+        }
+    }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints) {
+        var maxTethers = MaxTetherCount();
+        if (maxTethers <= 0) {
+            return;
+        }
+
+        foreach (var target in hints.PotentialTargets) {
+            if (target.Actor.OID == (uint)OID.ArcaneSphereSmall
+                && comets.GetValueOrDefault(target.Actor.InstanceID)?.Tethers == maxTethers) {
+                target.Priority = 2;
+            }
         }
     }
 

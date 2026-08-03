@@ -39,14 +39,19 @@ public enum AID : uint
     PoisonRainVisual = 0xB87F, // boss->self, 4.7s cast, 毒雨, raidwide visual
     PoisonRain = 0xB880, // helper, no cast, 毒雨, raidwide damage
 
-    SpitVenom = 0xB86E, // clone (0x4BCC), no cast, 分泌毒液, low-priority spit visual
-    // SpitVenom never cast-starts in replays (353 effects, 0 casts): it fires during the venom
-    // phase while the clone stands at the arena center. Kill points sit 24.8-28.7y from center
-    // (r25.2/25.5 N, r28.5 SW, r28.7 S), matching the official donut xAxis=30. The inner radius
-    // is unknown (omen_id=0, no Omen path) and the action cannot be previewed without a cast
-    // packet - documented architecture limitation, no component possible.
+    SpitVenom = 0xB86E, // clone (0x4BCC), no cast, persistent outer venom boundary
     SecreteVenomVisualA = 0xB86F, // boss->self, no cast, 分泌毒液 visual
     SecreteVenomVisualB = 0xC2DD // boss->self, no cast, 分泌毒液 visual
+}
+
+// B86E has no cast packet, but repeats for the entire encounter and kills targets in the outer
+// band. ARR hit positions start just outside 24.5y and the Action sheet gives a 30y outer radius.
+sealed class VenomBoundary(BossModule module) : Components.GenericAOEs(module)
+{
+    private static readonly AOEShapeDonut Shape = new(24.5f, 30f);
+    private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
 }
 
 // Cast rotations are replay-verified: each helper cast already carries the packet rotation pointing
@@ -101,6 +106,7 @@ sealed class VenomSpread(BossModule module) : Components.GenericAOEs(module)
     private const int PulseCount = 8;
     private const float InitialRadius = 5f;
     private const float RadiusStep = 2.5f;
+    private const float FinalRadius = InitialRadius + RadiusStep * (PulseCount - 1);
     private const double FirstDelayAfterVenom = 2.45d;
     private const double PulseInterval = 1.07d;
     private readonly List<Spread> _spreads = [with(4)];
@@ -120,6 +126,19 @@ sealed class VenomSpread(BossModule module) : Components.GenericAOEs(module)
     }
 
     public override void Update() => Prune();
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        base.AddAIHints(slot, actor, assignment, hints);
+        foreach (var spread in _spreads)
+        {
+            if (spread.Pulse >= PulseCount - 1)
+                continue;
+
+            var finalActivation = spread.Activation.AddSeconds((PulseCount - 1 - spread.Pulse) * PulseInterval);
+            hints.AddForbiddenZone(new SDCircle(spread.Origin, FinalRadius), finalActivation);
+        }
+    }
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
@@ -170,6 +189,7 @@ sealed class ManyMouthsToFeedStates : StateMachineBuilder
     public ManyMouthsToFeedStates(BossModule module) : base(module)
     {
         TrivialPhase()
+            .ActivateOnEnter<VenomBoundary>()
             .ActivateOnEnter<ManyMouthsAOEs>()
             .ActivateOnEnter<VenomPuddles>()
             .ActivateOnEnter<VenomSpread>()
