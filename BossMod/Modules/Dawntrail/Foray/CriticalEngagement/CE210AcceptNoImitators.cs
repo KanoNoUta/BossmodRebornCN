@@ -67,7 +67,17 @@ sealed class LethalBoundary(BossModule module) : Components.GenericAOEs(module)
     private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
+
+    public override void DrawArenaBackground(int pcSlot, Actor pc)
+    {
+        // The 24.5-30 donut gets clipped to the 25y walkable circle, leaving only a sliver that is
+        // effectively invisible. Draw a visible 24-25 band plus the fence outline so the kill ring
+        // reads clearly.
+        Arena.ZoneDonut(Arena.Center, 24f, 25f, Colors.Danger);
+        Arena.ZoneCircleOutlineUnclipped(Arena.Center, 25f, Colors.Danger, 3f);
+    }
 }
+
 
 // Every avoidable AOE below has an authoritative cast-start packet from the actor that owns the
 // shape. The helpers also carry their actual origin/rotation, so none of the patterns are inferred
@@ -121,6 +131,12 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
     private readonly Dictionary<ulong, int> _extra = [];
     private readonly List<AOEInstance> _displayed = new(4);
     private readonly HashSet<uint> _seenGlobalSequences = [];
+    private DateTime? _maxExtraAt;
+    private bool _mechanicFinished;
+    // extra 7 (max radius) holds for a couple seconds, then the mechanic is over and rings must
+    // not be rebuilt even though the helpers keep the growth status (that caused infinite
+    // clear->rebuild flicker).
+    private const double MaxExtraHold = 2d;
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
     {
@@ -143,22 +159,43 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
     {
         // Components can be activated after the helpers already received their growth status.
         // Recover that live state instead of waiting for a status-gain packet that will never repeat.
-        foreach (var helper in Module.Enemies((uint)OID.Helper))
+        var now = WorldState.CurrentTime;
+        var helpers = Module.Enemies((uint)OID.Helper).Where(h => !h.IsDeadOrDestroyed).ToList();
+        if (!_mechanicFinished)
         {
-            var status = helper.FindStatus((uint)SID.AreaOfInfluenceUp);
-            if (status is { } current && current.Extra is >= 1 and <= 7
-                && (!_extra.TryGetValue(helper.InstanceID, out var knownExtra) || knownExtra != current.Extra))
+            foreach (var helper in helpers)
             {
-                SetRing(helper, current.Extra);
+                var status = helper.FindStatus((uint)SID.AreaOfInfluenceUp);
+                if (status is { } current && current.Extra is >= 1 and <= 7
+                    && (!_extra.TryGetValue(helper.InstanceID, out var knownExtra) || knownExtra != current.Extra))
+                {
+                    SetRing(helper, current.Extra);
+                    if (current.Extra == 7)
+                        _maxExtraAt = now;
+                }
             }
         }
 
-        // The four helpers can persist after the mechanic without a status-loss packet (replays and
-        // live packet loss both do this). If no pulse has refreshed a ring for a while, it is stale
-        // and must not remain drawn until the next mechanic.
-        var now = WorldState.CurrentTime;
-        foreach (var key in _pending.Keys.Where(key => now > _pending[key].Activation.AddSeconds(1.5d)).ToArray())
-            Remove(key);
+        // Stale helpers without the growth status (or destroyed without a clean packet) must not
+        // keep their rings drawn until the next mechanic.
+        var live = helpers.ToDictionary(h => h.InstanceID);
+        foreach (var key in _pending.Keys.ToArray())
+        {
+            if (!live.TryGetValue(key, out var helper) || helper.FindStatus((uint)SID.AreaOfInfluenceUp) == null)
+                Remove(key);
+        }
+
+        // Mechanic end: after every ring reached max radius (extra 7) and held it briefly, the
+        // sequence is over - clear all rings and refuse to rebuild them (helpers keep the growth
+        // status, which previously caused an infinite clear/rebuild loop).
+        if (!_mechanicFinished && _maxExtraAt is { } maxAt && now > maxAt.AddSeconds(MaxExtraHold) && _pending.Count != 0)
+        {
+            Service.Logger.Information($"[CE210] MadeMagic finished, clearing {_pending.Count} rings");
+            _pending.Clear();
+            _extra.Clear();
+            _mechanicFinished = true;
+            _maxExtraAt = null;
+        }
     }
 
     public override void OnStatusGain(Actor actor, ref ActorStatus status)
@@ -167,7 +204,17 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
             || status.ID != (uint)SID.AreaOfInfluenceUp || status.Extra is < 1 or > 7)
             return;
 
+        // After the mechanic finished, ignore stray gains until the status actually drops.
+        if (_mechanicFinished)
+            return;
+        // Repeated gain for the same extra (no lose in between) would rebuild the ring every frame
+        // and make it flicker; keep the existing ring instead.
+        if (_extra.TryGetValue(actor.InstanceID, out var known) && known == status.Extra)
+            return;
         SetRing(actor, status.Extra);
+        if (status.Extra == 7)
+            _maxExtraAt = WorldState.CurrentTime;
+        Service.Logger.Information($"[CE210] MadeMagic status gain helper={actor.InstanceID:X} extra={status.Extra}");
     }
 
     private void SetRing(Actor actor, int extra)
@@ -179,12 +226,17 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
         _pending[actor.InstanceID] = new(shape, actor.Position, color: Colors.Danger, risky: false,
             activation: WorldState.FutureTime(0.3f), actorID: actor.InstanceID, shapeDistance: shape.Distance(actor.Position, default));
         _extra[actor.InstanceID] = extra;
+        Service.Logger.Information($"[CE210] MadeMagic ring helper={actor.InstanceID:X} extra={extra} r={outer:f1}");
     }
 
     public override void OnStatusLose(Actor actor, ref ActorStatus status)
     {
         if (status.ID == (uint)SID.AreaOfInfluenceUp)
+        {
             Remove(actor.InstanceID);
+            _mechanicFinished = false;
+            _maxExtraAt = null;
+        }
     }
 
     public override void OnActorDeath(Actor actor) => Remove(actor.InstanceID);
@@ -195,6 +247,11 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
         if (spell.Action.ID != (uint)AID.MadeMagic
             || spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence)
             || !_pending.TryGetValue(caster.InstanceID, out var current))
+            return;
+
+        // Ignore pulses after the mechanic finished so a repeated/duplicated event cannot keep
+        // refreshing the rings forever.
+        if (_mechanicFinished)
             return;
 
         // Every status step normally pulses twice (extra 7 pulses three times). The first event is
@@ -226,49 +283,54 @@ sealed class HellwardBound(BossModule module) : Components.GenericAOEs(module)
     private const double FinalDashGrace = 0.9d;
     private readonly List<AOEInstance> _lanes = new(3);
     private readonly HashSet<uint> _seenHitSequences = [];
+    private readonly AOEInstance[] _current = new AOEInstance[1];
     private DateTime _phaseExpires;
 
     public bool DashPhaseActive => WorldState.CurrentTime <= _phaseExpires;
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
     {
+        // 只显示当前 (第一条) lane 的长直条, 从 BCD7 出现一直显示到它落地; 后续 lane 等到轮到
+        // 它们时才显示, 不提前预告未来几次冲撞.
         if (WorldState.CurrentTime > _phaseExpires)
             _lanes.Clear();
-
-        var lanes = CollectionsMarshal.AsSpan(_lanes);
-        for (var i = 0; i < lanes.Length; ++i)
-        {
-            lanes[i].Color = i == 0 ? Colors.Danger : default;
-            // AI must choose a pocket that survives the entire route instead of crossing a later
-            // lane while chasing the moving boss. Later lanes remain visually ordered by activation.
-            lanes[i].Risky = true;
-        }
-        return lanes;
+        if (_lanes.Count == 0)
+            return [];
+        var lane = _lanes[0];
+        _current[0] = new(lane.Shape, lane.Origin, lane.Rotation, lane.Activation, color: Colors.Danger, risky: true,
+            shapeDistance: lane.ShapeDistance);
+        return _current;
     }
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
-        if (caster != Module.PrimaryActor || spell.Action.ID != (uint)AID.HellwardBound || spell.EventHappened)
+        // BCD7 is a non-damaging movement cast; it may arrive marked EventHappened, but we still
+        // need it to compute the dash lanes.
+        if (caster != Module.PrimaryActor || (spell.Action.ID & 0xFFFF) != (uint)AID.HellwardBound)
             return;
 
+        Service.Logger.Information($"[CE210] HellwardBound cast id={spell.Action.ID:X} caster={caster.InstanceID:X} loc=({spell.LocXZ.X:f1},{spell.LocXZ.Z:f1})");
         _lanes.Clear();
         _seenHitSequences.Clear();
 
         var p = spell.LocXZ - Arena.Center;
         var p90 = p.OrthoL();
-        WPos[] points = [Arena.Center + p, Arena.Center + p90, Arena.Center - p90, Arena.Center - p];
+        // 四连冲共 4 段 (5 点): 中心->落点, 落点->R90, R90->-R90, -R90->-p.
+        WPos[] points = [Arena.Center, Arena.Center + p, Arena.Center + p90, Arena.Center - p90, Arena.Center - p];
         var firstActivation = Module.CastFinishAt(spell).AddSeconds(FirstDashDelay);
-        for (var i = 0; i < 3; ++i)
+        for (var i = 0; i < 4; ++i)
             AddLane(points[i], points[i + 1], firstActivation.AddSeconds(i * DashInterval), caster.InstanceID);
-        _phaseExpires = firstActivation.AddSeconds(2d * DashInterval + FinalDashGrace);
+        _phaseExpires = firstActivation.AddSeconds(3d * DashInterval + FinalDashGrace);
+        Service.Logger.Information($"[CE210] HellwardBound lanes={_lanes.Count} p=({p.X:f1},{p.Z:f1}) firstAct={firstActivation:O}");
     }
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell)
     {
-        if (caster != Module.PrimaryActor || spell.Action.ID != (uint)AID.HellwardBoundHit || !DashPhaseActive
+        if (caster != Module.PrimaryActor || (spell.Action.ID & 0xFFFF) != (uint)AID.HellwardBoundHit || !DashPhaseActive
             || spell.GlobalSequence != 0 && !_seenHitSequences.Add(spell.GlobalSequence))
             return;
 
+        Service.Logger.Information($"[CE210] HellwardBound hit id={spell.Action.ID:X} lanes={_lanes.Count} active={DashPhaseActive}");
         if (_lanes.Count != 0)
             _lanes.RemoveAt(0);
         if (_lanes.Count == 0)
