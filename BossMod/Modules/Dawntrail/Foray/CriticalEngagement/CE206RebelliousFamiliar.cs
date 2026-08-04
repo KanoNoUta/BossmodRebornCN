@@ -441,6 +441,13 @@ sealed class CircularKnockback(BossModule module) : Components.GenericKnockback(
             if (aside == null || !aside.AddCombinedAIHint(kb, hints))
                 hints.AddForbiddenZone(new SDKnockbackInAABBSquareTowardsOrigin(Arena.Center, kb.Origin, kb.Distance, SafeHalfWidth), kb.Activation);
         }
+
+        // 第二段安全区引导：第二段 imminent 时引导 AI 到矩形框（第二段击退方向电网内侧）。
+        if (aside?.SecondDir is { } t && _casters.Any(kb => (kb.Activation - WorldState.CurrentTime).TotalSeconds <= 3d))
+        {
+            var center = Arena.Center + t * SecondSafeOffset;
+            hints.GoalZones.Add(position => position.InRect(center, t.OrthoL(), 5f, 5f, 3f) ? 50f : 0f);
+        }
     }
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
@@ -549,6 +556,20 @@ sealed class KnockAside(BossModule module) : Components.GenericKnockback(module)
     {
         foreach (var source in _sources)
             hints.AddForbiddenZone(new SDAsideKnockbackInAABBSquare(Arena.Center, source.AsidePos, source.Facing.ToDirection(), Distance, SafeHalfWidth), source.Activation);
+
+        // 第一段正确站位: 两段击退间隔极短 (~0.9s), AI 落地后没时间移动。引导到
+        // "被 15y 侧击后的落点 = 第二段击退起点(电网内侧)" 的位置, 一次就位两段都安全。
+        if (HasActiveAside && SecondDir is { } t)
+        {
+            var secondStart = Arena.Center + t * CircularKnockback.SecondSafeOffset;
+            foreach (var source in _sources)
+            {
+                var side = source.Facing.ToDirection().OrthoR();
+                var asideDir = source.KindFor(actor.Position) == Kind.DirRight ? side : -side;
+                var goal = secondStart - asideDir * Distance;
+                hints.GoalZones.Add(AIHints.GoalSingleTarget(goal, 2f, 50f));
+            }
+        }
     }
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)

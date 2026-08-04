@@ -294,6 +294,10 @@ sealed class HellwardBound(BossModule module) : Components.GenericAOEs(module)
         // 它们时才显示, 不提前预告未来几次冲撞.
         if (WorldState.CurrentTime > _phaseExpires)
             _lanes.Clear();
+        // 第 4 段的 hit 事件偶发缺失, lane 切换会卡住; 当前段 activation 已过则按时间推进,
+        // 保证最后一段也能按时显示.
+        while (_lanes.Count > 1 && WorldState.CurrentTime > _lanes[0].Activation.AddSeconds(0.5d))
+            _lanes.RemoveAt(0);
         if (_lanes.Count == 0)
             return [];
         var lane = _lanes[0];

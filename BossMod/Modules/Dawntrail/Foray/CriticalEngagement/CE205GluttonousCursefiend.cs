@@ -48,20 +48,17 @@ public enum AID : uint
 
 sealed class MiasmaBoundary(BossModule module) : Components.GenericAOEs(module)
 {
-    // Replay boundary damage lands at ~28.6y and the fire strips reach the same edge, so the real
-    // walkable arena is about 28y, not 20y. Keep a small margin inside the measured wall.
-    private static readonly AOEShapeDonut Shape = new(27.5f, 30f);
+    // 实测电网边界约 ±23.5y (玩家抓坐标: Z -23.78 / +23.4)。之前按 28y 画大了, 导致躲地火时
+    // 跑到 23.5~28 的假安全区踩进电网。电网外圈 30y (解包 EffectRange), 可见部分贴边绘制。
+    private static readonly AOEShapeDonut Shape = new(23.5f, 30f);
     private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
 
     public override void DrawArenaBackground(int pcSlot, Actor pc)
     {
-        // The 27.5-30 donut gets clipped to the 28y walkable circle, leaving only a sliver that is
-        // effectively invisible. Draw a visible 27-28 band plus the fence outline so the kill ring
-        // reads clearly.
-        Arena.ZoneDonut(Arena.Center, 27f, 28f, Colors.Danger);
-        Arena.ZoneCircleOutlineUnclipped(Arena.Center, 28f, Colors.Danger, 3f);
+        Arena.ZoneDonut(Arena.Center, 22.5f, 23.5f, Colors.Danger);
+        Arena.ZoneCircleOutlineUnclipped(Arena.Center, 23.5f, Colors.Danger, 3f);
     }
 }
 
@@ -287,4 +284,4 @@ sealed class GluttonousCursefiendStates : StateMachineBuilder
     SortOrder = 4)]
 // Replay player positions and the 28.6y boundary hits show the arena is 28y, not 20y; the old
 // 20y circle clipped the outer halves of the long fire strips.
-public sealed class GluttonousCursefiend(WorldState ws, Actor primary) : BossModule(ws, primary, new(765f, 0f), new ArenaBoundsCircle(28f));
+public sealed class GluttonousCursefiend(WorldState ws, Actor primary) : BossModule(ws, primary, new(765f, 0f), new ArenaBoundsCircle(23.5f));
