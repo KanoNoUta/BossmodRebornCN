@@ -338,6 +338,32 @@ sealed class KnowledgeSectors(BossModule module) : Components.GenericAOEs(module
         hints.Add($"Knowledge level {level} (base {actor.ForayInfo.Level} + {correction})");
     }
 
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        base.AddAIHints(slot, actor, assignment, hints);
+
+        // The dangerous sectors are already forbidden by the base implementation; without a
+        // positive goal the AI just avoids them and never commits to a safe sector. Guide it into
+        // every sector that satisfies this player's rule, scoring deeper positions higher.
+        var correction = Correction(actor);
+        if (actor.ForayInfo.Level <= 0 || correction == 0)
+            return;
+        var level = actor.ForayInfo.Level + correction;
+
+        foreach (var sector in _pending)
+        {
+            if (SatisfiesRule(level, sector.Kind))
+                continue;
+
+            var shapeDistance = sector.Shape.Distance(Module.Arena.Center, sector.Rotation);
+            hints.GoalZones.Add(position =>
+            {
+                var distance = shapeDistance.Distance(position);
+                return distance <= 0 ? Math.Clamp(-distance, 0f, 10f) : 0f;
+            });
+        }
+    }
+
     public override void Update() => PruneExpired();
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
