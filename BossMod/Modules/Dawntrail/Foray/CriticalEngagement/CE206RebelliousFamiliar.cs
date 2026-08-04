@@ -558,17 +558,13 @@ sealed class KnockAside(BossModule module) : Components.GenericKnockback(module)
             hints.AddForbiddenZone(new SDAsideKnockbackInAABBSquare(Arena.Center, source.AsidePos, source.Facing.ToDirection(), Distance, SafeHalfWidth), source.Activation);
 
         // 第一段正确站位: 两段击退间隔极短 (~0.9s), AI 落地后没时间移动。引导到
-        // "被 15y 侧击后的落点 = 第二段击退起点(电网内侧)" 的位置, 一次就位两段都安全。
+        // 安全半圆内 (固定 SecondDir 半场), 站半圆内任意点被 15y 侧击后落点都在 19y 电网内。
         if (HasActiveAside && SecondDir is { } t)
         {
-            var secondStart = Arena.Center + t * CircularKnockback.SecondSafeOffset;
-            foreach (var source in _sources)
-            {
-                var side = source.Facing.ToDirection().OrthoR();
-                var asideDir = source.KindFor(actor.Position) == Kind.DirRight ? side : -side;
-                var goal = secondStart - asideDir * Distance;
-                hints.GoalZones.Add(AIHints.GoalSingleTarget(goal, 2f, 50f));
-            }
+            // 目标区偏向安全半场深处 (SecondDir 方向 ~60% 半径处), 半径收窄, AI 停在半场内
+            // 且不贴着场地中线。
+            var goal = Arena.Center + t * (SafeStartRadius * 0.6f);
+            hints.GoalZones.Add(AIHints.GoalSingleTarget(goal, SafeStartRadius * 0.35f, 50f));
         }
     }
 
