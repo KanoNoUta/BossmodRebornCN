@@ -54,6 +54,15 @@ sealed class MiasmaBoundary(BossModule module) : Components.GenericAOEs(module)
     private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
+
+    public override void DrawArenaBackground(int pcSlot, Actor pc)
+    {
+        // The 27.5-30 donut gets clipped to the 28y walkable circle, leaving only a sliver that is
+        // effectively invisible. Draw a visible 27-28 band plus the fence outline so the kill ring
+        // reads clearly.
+        Arena.ZoneDonut(Arena.Center, 27f, 28f, Colors.Danger);
+        Arena.ZoneCircleOutlineUnclipped(Arena.Center, 28f, Colors.Danger, 3f);
+    }
 }
 
 // These actions all have usable CastStart packets in the replays. Keep the warning active until
@@ -98,6 +107,7 @@ sealed class AlgolDrawIn(BossModule module) : Components.GenericKnockback(module
     private static readonly Angle DefaultSpinStep = -15f.Degrees();
     private static readonly AOEShapeCone LongCone = new(60f, 15f.Degrees());
     private static readonly AOEShapeCone ShortCone = new(30f, 15f.Degrees());
+    private static readonly AOEShapeCone SafeCone = new(12f, 15f.Degrees());
     // slightly wider than the drawn cones so the AI keeps a margin from the sweep edge
     private static readonly AOEShapeCone HintCone = new(30f, 22.5f.Degrees());
     private readonly List<Knockback> _active = [with(2)];
@@ -135,6 +145,9 @@ sealed class AlgolDrawIn(BossModule module) : Components.GenericKnockback(module
             var step = _spinStep == default ? DefaultSpinStep : _spinStep;
             ShortCone.Draw(Arena, spinning.Origin, spinning.Direction);
             ShortCone.Outline(Arena, spinning.Origin, spinning.Direction + step);
+            // 绿色安全扇形: 危险区起点后面 (已扫过侧), 贴着 boss 跟着绕圈.
+            var safeDir = spinning.Direction - step * 3;
+            SafeCone.Draw(Arena, spinning.Origin, safeDir, Colors.Safe);
         }
     }
 
@@ -153,6 +166,11 @@ sealed class AlgolDrawIn(BossModule module) : Components.GenericKnockback(module
                 direction += step;
                 activation = activation.AddSeconds(SpinTickInterval);
             }
+
+            // 旋转吸引: 安全位置在危险区起点后面 (已扫过侧), AI 贴着 boss 绕圈走, 而不是追 boss/被吸进去.
+            // 目标点 = boss 位置 + 旋转反方向 3 步 (危险区刚扫过的后方), 距离短保证移速能跟上绕圈.
+            var safeDir = spinning.Direction - step * 3;
+            hints.GoalZones.Add(AIHints.GoalSingleTarget(spinning.Origin + safeDir.ToDirection() * 9f, 4f));
         }
     }
 

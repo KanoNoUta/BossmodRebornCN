@@ -82,10 +82,10 @@ sealed class DarkIV(BossModule module) : Components.RaidwideCast(module, (uint)A
 
 sealed class ElectricBoundary(BossModule module) : Components.GenericAOEs(module)
 {
-    // ARR BFD0 deaths cluster at ~24.4y from center. Keep the visual strip narrow, but reserve
-    // the outer 2.25y for pathfinding so dodging circles and crosses cannot route into the fence.
-    private static readonly AOEShapeRect Shape = new(24.5f, 0.75f, 24.5f);
-    private static readonly AOEShapeRect AIShape = new(24.5f, 1.5f, 24.5f);
+    // ARR BFD0 deaths cluster at ~24.4y from center. Visual strip is 4.5y wide (2.25 half-width);
+    // AI pathfinding keeps a 1.5y extra margin on each side so it never routes into the fence.
+    private static readonly AOEShapeRect Shape = new(24.5f, 2.25f, 24.5f);
+    private static readonly AOEShapeRect AIShape = new(24.5f, 3.75f, 24.5f);
     private readonly AOEInstance[] _aoes = Build(module.Arena.Center);
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoes;

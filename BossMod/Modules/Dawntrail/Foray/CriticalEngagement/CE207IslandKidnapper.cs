@@ -45,6 +45,9 @@ sealed class WindBoundary(BossModule module) : Components.GenericAOEs(module)
 
     public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
         => hints.AddForbiddenZone(Forbidden, Module.Arena.Center);
+
+    public override void DrawArenaBackground(int pcSlot, Actor pc)
+        => Arena.ZoneCircleOutlineUnclipped(Arena.Center, 23.5f, Colors.Danger, 2f);
 }
 
 sealed class KidnapperAOEs(BossModule module) : ReplayValidatedCastAOEs(module)

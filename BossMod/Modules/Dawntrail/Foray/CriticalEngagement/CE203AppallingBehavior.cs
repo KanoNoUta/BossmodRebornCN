@@ -107,7 +107,11 @@ sealed class AppallingAOEs(BossModule module) : Components.GenericAOEs(module)
             var shape = pending.Shape!;
             var source = pending.FollowCaster ? WorldState.Actors.Find(pending.ActorID) : null;
             var origin = source?.Position ?? pending.Origin;
-            var rotation = source?.Rotation ?? pending.Rotation;
+            // 学习指令的锥在 Pallkeeper 传送 (磁场转换) 后必须朝向场中, 而不是沿用 Pallkeeper 的
+            // 旧朝向 - 否则 Swap 后锥形指令会画错方向.
+            var rotation = pending.FollowCaster && pending.ActionID is (uint)AID.BadBreathInstruction or (uint)AID.BadBreathAOE
+                ? Angle.FromDirection(Module.Arena.Center - origin)
+                : source?.Rotation ?? pending.Rotation;
             var imminent = pending.Activation <= riskyDeadline;
             _displayed.Add(new(shape, origin, rotation, pending.Activation,
                 imminent ? Colors.Danger : Colors.AOE, imminent, pending.ActorID, shape.Distance(origin, rotation)));
@@ -136,8 +140,10 @@ sealed class AppallingAOEs(BossModule module) : Components.GenericAOEs(module)
             _pending.RemoveAll(p => p.InstructionSlot >= 0);
             _instructionSources.Clear();
             _instructionTethers = 0;
+            // 连线时无法预知圆/锥顺序 (实测第一轮 Normal 是锥先, 第二轮 Reverse 也不同) - 一律
+            // 等第一个 BadBreath/Plaincracker 施法校准, 否则连线阶段会画出错误顺序的危险区.
+            _instructionCircleFirst = null;
             var reverse = spell.Action.ID == (uint)AID.EsotericInstructionReverse;
-            _instructionCircleFirst = reverse ? null : true;
             _instructionFirstActivation = Module.CastFinishAt(spell, reverse ? 12.7d : 6.3d);
             return;
         }
@@ -288,6 +294,15 @@ sealed class ElectricBoundary(BossModule module) : Components.GenericAOEs(module
     private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
+
+    public override void DrawArenaBackground(int pcSlot, Actor pc)
+    {
+        // The 19.5-25 donut gets clipped to the 20y walkable circle, leaving only a sliver that is
+        // effectively invisible. Draw a visible 19-20 band plus the fence outline so the kill ring
+        // reads clearly.
+        Arena.ZoneDonut(Arena.Center, 19f, 20f, Colors.Danger);
+        Arena.ZoneCircleOutlineUnclipped(Arena.Center, 20f, Colors.Danger, 3f);
+    }
 }
 
 // Death Roulette is a polar grid, not the C26B 18-25y donut that used to be drawn here. ARR v5
@@ -303,8 +318,11 @@ sealed class DeathRouletteGrid(BossModule module) : Components.GenericAOEs(modul
     // Replay hit coordinates put inner-ring victims as far as 56.1 degrees from the helper's
     // facing. The action sectors are therefore 120/90 degrees wide (the shape API takes a
     // half-angle), rather than the accidentally halved 60/45-degree display used previously.
-    private static readonly AOEShapeDonutSector InnerCell = new(4.5f, 12.5f, 62f.Degrees());
-    private static readonly AOEShapeDonutSector OuterCell = new(11.5f, 20.5f, 47f.Degrees());
+    // 中间圈是 6 格 (每格 60°), 危险区按 2 个对侧格 (120°) 建模, 半角 60°.
+    private static readonly AOEShapeDonutSector InnerCell = new(4.5f, 12.5f, 60f.Degrees());
+    // 第三圈 (外圈) 8 格 (每格 45°): 两个对侧安全区各 45° (合计 2 格), 危险覆盖其余 6 格 (270°).
+    // 两个对侧危险扇区各 135° 宽 (半角 67.5°), 中间留两个 45° 缺口.
+    private static readonly AOEShapeDonutSector OuterCell = new(11.5f, 20.5f, 67.5f.Degrees());
     private readonly List<AOEInstance> _displayed = [];
     private readonly HashSet<uint> _seenSequences = [];
     private readonly Dictionary<ulong, Angle> _orientationBaseline = [];
