@@ -99,7 +99,7 @@ sealed class BladePatterns(BossModule module) : Components.GenericAOEs(module)
     private static readonly AOEShapeCircle Circle12 = new(12f);
     private static readonly AOEShapeCross Cross8 = new(60f, 4f);
     private static readonly AOEShapeCross Cross10 = new(60f, 5f);
-    private static readonly AOEShapeRect AncientAeroRect = new(70f, 3f);
+    private static readonly AOEShapeRect AncientAeroRect = new(35f, 3f, 35f);
     private static readonly AOEShapeCircle ImpactCircle = new(25f);
 
     private sealed class PendingAOE(uint actionID, AOEInstance aoe)
@@ -145,7 +145,10 @@ sealed class BladePatterns(BossModule module) : Components.GenericAOEs(module)
             return CollectionsMarshal.AsSpan(_displayed);
         }
 
-        var waveDeadline = _pending[0].AOE.Activation.AddSeconds(WaveWindow);
+        // Ancient Aero has a 3s cast and fires constantly; a 0.5s risk window leaves the AI no
+        // time to leave the 70y lane. Keep it risky for the whole cast.
+        var waveDeadline = _pending[0].AOE.Activation.AddSeconds(
+            _pending[0].ActionID == (uint)AID.AncientAero ? 2.5d : WaveWindow);
         foreach (var entry in _pending)
         {
             if (entry.AOE.Activation > waveDeadline)

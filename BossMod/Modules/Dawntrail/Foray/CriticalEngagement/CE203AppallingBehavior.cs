@@ -126,7 +126,9 @@ sealed class AppallingAOEs(BossModule module) : Components.GenericAOEs(module)
             // Hammer and learned instructions are ordered movement puzzles. Later previews are not
             // currently dangerous for display purposes, but pathfinding needs their activation
             // times now or it can choose a dead-end safe spot for the preceding hit.
-            if (aoe.Risky || ReferenceEquals(aoe.Shape, Hammer) || ReferenceEquals(aoe.Shape, BadBreath) || ReferenceEquals(aoe.Shape, PlaincrackerLarge))
+            // Occult missile spawns 4-per-wave for three consecutive waves; only marking the risky
+            // (0.25s) wave lets AI stand inside a future wave and get hit. Forbid all waves.
+            if (aoe.Risky || ReferenceEquals(aoe.Shape, Hammer) || ReferenceEquals(aoe.Shape, BadBreath) || ReferenceEquals(aoe.Shape, PlaincrackerLarge) || ReferenceEquals(aoe.Shape, Missile))
                 hints.AddForbiddenZone(aoe.ShapeDistance ?? aoe.Shape.Distance(aoe.Origin, aoe.Rotation), aoe.Activation);
         }
     }

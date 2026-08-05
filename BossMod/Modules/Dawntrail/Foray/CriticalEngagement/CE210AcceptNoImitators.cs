@@ -281,6 +281,7 @@ sealed class HellwardBound(BossModule module) : Components.GenericAOEs(module)
     private const double FirstDashDelay = 2.2d;
     private const double DashInterval = 2.2d;
     private const double FinalDashGrace = 0.9d;
+    private const double DisplayLead = 2d;
     private readonly List<AOEInstance> _lanes = new(3);
     private readonly HashSet<uint> _seenHitSequences = [];
     private readonly AOEInstance[] _current = new AOEInstance[1];
@@ -290,20 +291,23 @@ sealed class HellwardBound(BossModule module) : Components.GenericAOEs(module)
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
     {
-        // 只显示当前 (第一条) lane 的长直条, 从 BCD7 出现一直显示到它落地; 后续 lane 等到轮到
-        // 它们时才显示, 不提前预告未来几次冲撞.
+        // 纯时间驱动: 每段在其落地前 2s 显示 (risky), 落地后 0.5s 消失。不依赖 hit 事件,
+        // 避免 hit 时序不稳/缺失导致第二段显示太晚、AI 吃到伤害才躲。
         if (WorldState.CurrentTime > _phaseExpires)
             _lanes.Clear();
-        // 第 4 段的 hit 事件偶发缺失, lane 切换会卡住; 当前段 activation 已过则按时间推进,
-        // 保证最后一段也能按时显示.
-        while (_lanes.Count > 1 && WorldState.CurrentTime > _lanes[0].Activation.AddSeconds(0.5d))
-            _lanes.RemoveAt(0);
         if (_lanes.Count == 0)
             return [];
-        var lane = _lanes[0];
-        _current[0] = new(lane.Shape, lane.Origin, lane.Rotation, lane.Activation, color: Colors.Danger, risky: true,
-            shapeDistance: lane.ShapeDistance);
-        return _current;
+        var now = WorldState.CurrentTime;
+        foreach (var lane in _lanes)
+        {
+            if (now >= lane.Activation.AddSeconds(-DisplayLead) && now <= lane.Activation.AddSeconds(0.5d))
+            {
+                _current[0] = new(lane.Shape, lane.Origin, lane.Rotation, lane.Activation, color: Colors.Danger, risky: true,
+                    shapeDistance: lane.ShapeDistance);
+                return _current;
+            }
+        }
+        return [];
     }
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
