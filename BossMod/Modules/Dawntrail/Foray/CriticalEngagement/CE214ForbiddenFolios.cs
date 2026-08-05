@@ -503,6 +503,14 @@ sealed class BookDropTower(BossModule module) : Components.GenericTowers(module,
         if (spell.Action.ID == WatchedAction)
             Towers.RemoveAll(t => t.ActorID == caster.InstanceID);
     }
+
+    // Cast-finished 事件偶发缺失会留下残留塔; activation 过 2s 后强制清除。
+    public override void Update()
+    {
+        var now = WorldState.CurrentTime;
+        Towers.RemoveAll(t => now > t.Activation.AddSeconds(2d));
+        base.Update();
+    }
 }
 
 // The three B8DF helpers carry duplicate damage packets; the boss cast is the stable warning.
