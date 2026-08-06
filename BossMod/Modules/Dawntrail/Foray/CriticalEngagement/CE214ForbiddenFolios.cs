@@ -171,32 +171,59 @@ sealed class CoverToCoverSequence(BossModule module) : Components.GenericAOEs(mo
 // Thunder II arrives in two batches, two seconds apart. Draw both batches for planning while only
 // making the earliest simultaneous set risky; otherwise automation sees the complete square as
 // forbidden and oscillates. Each helper's origin and rotation are the actual lane geometry.
-sealed class ThunderII(BossModule module) : ReplayValidatedCastAOEs(module)
+sealed class ThunderII(BossModule module) : Components.GenericAOEs(module)
 {
-    // Hit reconstruction puts every confirmed target within 2.74y of the lane center (including
-    // player hitbox) while non-targets begin at the same boundary. A 5y-wide lane leaves the
-    // intended 5y gaps between helpers spaced 10y apart; width 10 falsely tiles the whole arena.
-    private static readonly AOEShapeRect Shape = new(25f, 2.5f, 25f);
-    // Both batches resolve two seconds apart. Widening the risk window to cover both at once made
-    // the full lane frame leave no safe cell (regression: noSafeFrames), so the second batch must
-    // stay preview until the first resolves; the 0.25s tail is unavoidable without a per-batch
-    // deadline. The "three-through-one" weave the operator reported is the ink grid, not thunder.
-    protected override double RiskyActivationWindow => 0.25d;
-    protected override DateTime? CompetingActivation => Module.FindComponent<BasicAOEs>()?.EarliestActivation;
-    protected override AOEConfig? ConfigFor(uint actionID) => actionID == (uint)AID.ThunderII ? new(Shape) : null;
+    // 井字整体: helper 的 ThunderII cast 事件偶发缺失会导致部分条不画。
+    // 从存活 helper 实体实时画 (施法中)。helper 站在场地边缘的 50x50 方形边框上，
+    // 直条必须对称 50+50 (100y) 才能从任意一侧贯通全场，横竖交叉成完整井字网格；
+    // 60y (30+30) 只能覆盖到场地中部，会导致网格缺 1/4、条子看起来是分开的。
+    private static readonly AOEShapeRect Shape = new(50f, 2.5f, 50f);
+    private readonly List<AOEInstance> _displayed = [with(16)];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
+    {
+        _displayed.Clear();
+        var now = WorldState.CurrentTime;
+        // 两批直条间隔 2s、互相交错 5y；若同时画，条形会铺满全场变成一整片颜色。
+        // 先找最早结算的那批，重叠期间只画它，等它消失后再显示下一批。
+        var earliest = default(DateTime);
+        foreach (var helper in Module.Enemies((uint)OID.Helper))
+        {
+            if (helper.IsDeadOrDestroyed || helper.CastInfo is not { } cast || (cast.Action.ID & 0xFFFF) != (uint)AID.ThunderII)
+                continue;
+            var activation = Module.CastFinishAt(cast);
+            if (earliest == default || activation < earliest)
+                earliest = activation;
+        }
+        if (earliest == default)
+            return CollectionsMarshal.AsSpan(_displayed);
+
+        foreach (var helper in Module.Enemies((uint)OID.Helper))
+        {
+            if (helper.IsDeadOrDestroyed || helper.CastInfo is not { } cast || (cast.Action.ID & 0xFFFF) != (uint)AID.ThunderII)
+                continue;
+            var activation = Module.CastFinishAt(cast);
+            if (activation > earliest.AddSeconds(0.5d))
+                continue;
+            var origin = helper.Position;
+            var imminent = activation <= now.AddSeconds(1d);
+            _displayed.Add(new(Shape, origin, cast.Rotation, activation,
+                imminent ? Colors.Danger : Colors.AOE, imminent, helper.InstanceID,
+                Shape.Distance(origin, cast.Rotation)));
+        }
+        return CollectionsMarshal.AsSpan(_displayed);
+    }
 }
 
-// Quad Rule emits four waves at roughly two-second intervals. Unlike ordinary self AOEs, B8CA's
-// facing points away from its location target in the recording, so derive the lane direction from
-// source -> LocXZ. The fixed 50-yalm length intentionally extends to the arena edge.
 sealed class HorizontalRule(BossModule module) : Components.GenericAOEs(module)
 {
-    private static readonly AOEShapeRect Shape = new(25f, 3f, 25f);
+    // The reference trigger uses refY=50/offY=-50/radius=3: every rule is a 6y-wide line
+    // extending 50y in both directions from the boss center, so it always crosses the full arena.
+    private static readonly AOEShapeRect Shape = new(50f, 3f, 50f);
     private const double EventResolveTolerance = 0.5d;
     private const double ExpireDelay = 2d;
     private readonly List<AOEInstance> _pending = [with(16)];
     private readonly List<AOEInstance> _displayed = [with(16)];
-    private readonly HashSet<uint> _seenGlobalSequences = [];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
     {
@@ -226,13 +253,16 @@ sealed class HorizontalRule(BossModule module) : Components.GenericAOEs(module)
 
         PruneExpired();
         var activation = Module.CastFinishAt(spell);
-        var direction = spell.LocXZ - caster.Position;
-        if (activation <= WorldState.CurrentTime || direction.LengthSq() < 0.01f)
+        if (activation <= WorldState.CurrentTime)
             return;
 
         _pending.RemoveAll(aoe => aoe.ActorID == caster.InstanceID);
-        var rotation = Angle.FromDirection(direction);
-        _pending.Add(new(Shape, caster.Position, rotation, activation, actorID: caster.InstanceID, shapeDistance: Shape.Distance(caster.Position, rotation)));
+        // The location field is occasionally omitted on one of the four concurrent helper
+        // packets. The cast rotation is always present and is the authoritative cardinal lane
+        // orientation; the shape is symmetric front/back, so its facing sign is immaterial.
+        var rotation = spell.Rotation;
+        var origin = caster.Position;
+        _pending.Add(new(Shape, origin, rotation, activation, actorID: caster.InstanceID, shapeDistance: Shape.Distance(origin, rotation)));
         _pending.Sort((left, right) => left.Activation.CompareTo(right.Activation));
     }
 
@@ -244,7 +274,7 @@ sealed class HorizontalRule(BossModule module) : Components.GenericAOEs(module)
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell)
     {
-        if (spell.Action.ID != (uint)AID.HorizontalRule || spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence))
+        if (spell.Action.ID != (uint)AID.HorizontalRule)
             return;
 
         _pending.RemoveAll(aoe => aoe.ActorID == caster.InstanceID);
@@ -274,11 +304,10 @@ sealed class KnowledgeSectors(BossModule module) : Components.GenericAOEs(module
     private enum SectorKind { Level3, Level4, Level4Wide, Level5, Prime, PrimeWide }
     private readonly record struct SectorConfig(SectorKind Kind, AOEShape Shape, OID PageOID);
 
-    private sealed class PendingSector(SectorKind kind, AOEShape shape, WPos origin, Angle rotation, DateTime activation, ulong casterID)
+    private sealed class PendingSector(SectorKind kind, AOEShape shape, Angle rotation, DateTime activation, ulong casterID)
     {
         public readonly SectorKind Kind = kind;
         public readonly AOEShape Shape = shape;
-        public readonly WPos Origin = origin;
         public readonly Angle Rotation = rotation;
         public readonly DateTime Activation = activation;
         public readonly HashSet<ulong> Casters = [casterID];
@@ -304,19 +333,20 @@ sealed class KnowledgeSectors(BossModule module) : Components.GenericAOEs(module
 
         foreach (var sector in _pending)
         {
-            // The knowledge cone originates at the page's position and faces the arena center.
-            var direction = Angle.FromDirection(Module.Arena.Center - sector.Origin);
+            // The helper's rotation is the authoritative sector direction. The damage cone
+            // originates at the arena center; page actors only announce the rule for that sector.
+            var direction = sector.Rotation;
             if (!unknown && SatisfiesRule(level, sector.Kind))
             {
                 // This sector is safe for this player: outline it green so the eye can see where to
                 // stand, without making it risky for automation.
-                _displayed.Add(new(sector.Shape, sector.Origin, direction, sector.Activation,
-                    Colors.Safe, false, sector.Casters.FirstOrDefault(), sector.Shape.Distance(sector.Origin, direction)));
+                _displayed.Add(new(sector.Shape, Module.Arena.Center, direction, sector.Activation,
+                    Colors.Safe, false, sector.Casters.FirstOrDefault(), sector.Shape.Distance(Module.Arena.Center, direction)));
                 continue;
             }
 
-            _displayed.Add(new(sector.Shape, sector.Origin, direction, sector.Activation,
-                actorID: sector.Casters.FirstOrDefault(), shapeDistance: sector.Shape.Distance(sector.Origin, direction)));
+            _displayed.Add(new(sector.Shape, Module.Arena.Center, direction, sector.Activation,
+                actorID: sector.Casters.FirstOrDefault(), shapeDistance: sector.Shape.Distance(Module.Arena.Center, direction)));
         }
         return CollectionsMarshal.AsSpan(_displayed);
     }
@@ -353,11 +383,11 @@ sealed class KnowledgeSectors(BossModule module) : Components.GenericAOEs(module
 
         foreach (var sector in _pending)
         {
-            if (SatisfiesRule(level, sector.Kind))
+            if (!SatisfiesRule(level, sector.Kind))
                 continue;
 
-            var direction = Angle.FromDirection(Module.Arena.Center - sector.Origin);
-            var shapeDistance = sector.Shape.Distance(sector.Origin, direction);
+            var direction = sector.Rotation;
+            var shapeDistance = sector.Shape.Distance(Module.Arena.Center, direction);
             hints.GoalZones.Add(position =>
             {
                 var distance = shapeDistance.Distance(position);
@@ -387,7 +417,7 @@ sealed class KnowledgeSectors(BossModule module) : Components.GenericAOEs(module
             return;
         }
 
-        _pending.Add(new(config.Kind, config.Shape, caster.Position, spell.Rotation, activation, caster.InstanceID));
+        _pending.Add(new(config.Kind, config.Shape, spell.Rotation, activation, caster.InstanceID));
         _pending.Sort((left, right) => left.Activation.CompareTo(right.Activation));
     }
 
@@ -474,34 +504,57 @@ sealed class KnowledgeSectors(BossModule module) : Components.GenericAOEs(module
 // stand in (victims cluster inside each 3y book). Draw Unbound Ink as a red circle and BookDrop
 // as a tower.
 sealed class UnboundInk(BossModule module) : Components.SimpleAOEs(module, (uint)AID.UnboundInk, new AOEShapeCircle(9f));
-// 丢书塔: 每波多个书随机选 2 个塔踩 (1-2 人), 不是全部塔都要踩。
+// 丢书塔: 所有书塔都需要显示，但 AI 只从同一波中固定选一个前往，不能把显示列表
+// 直接交给 GenericTowers，否则它会尝试同时补满每一个塔。
 sealed class BookDropTower(BossModule module) : Components.GenericTowers(module, (uint)AID.BookDrop)
 {
     private const float Radius = 3f;
-    private const int MaxTowersPerWave = 2;
+    private const int MaxTowersPerWave = 1;
     private const int WaveSize = 5;
     private readonly List<(ulong ID, WPos Pos, DateTime Act)> _pending = [with(8)];
+    private readonly List<Components.GenericTowers.Tower> _visibleTowers = [with(8)];
     private readonly Random _rng = new();
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
         if (spell.Action.ID != WatchedAction)
             return;
-        _pending.Add((caster.InstanceID, spell.LocXZ, Module.CastFinishAt(spell)));
+        var tower = (caster.InstanceID, spell.LocXZ, Module.CastFinishAt(spell));
+        _pending.Add(tower);
+        _visibleTowers.Add(new(tower.Item2, Radius, 1, 2, activation: tower.Item3, actorID: tower.Item1));
         if (_pending.Count < WaveSize)
             return;
 
-        // 每波收齐后随机选 MaxTowersPerWave 个塔, 固定下来避免 AI 每帧抖动。
-        var chosen = _pending.OrderBy(_ => _rng.Next()).Take(MaxTowersPerWave);
-        foreach (var t in chosen)
+        // 每波收齐后只固定选择一个 AI 目标，避免每帧重新选塔导致寻路抖动；所有塔仍保留
+        // 在 _visibleTowers 中给玩家绘制。
+        for (var i = 0; i < MaxTowersPerWave; ++i)
+        {
+            var index = _rng.Next(_pending.Count);
+            var t = _pending[index];
             Towers.Add(new(t.Pos, Radius, 1, 2, activation: t.Act, actorID: t.ID));
+            _pending.RemoveAt(index);
+        }
         _pending.Clear();
     }
 
     public override void OnCastFinished(Actor caster, ActorCastInfo spell)
     {
         if (spell.Action.ID == WatchedAction)
+        {
             Towers.RemoveAll(t => t.ActorID == caster.InstanceID);
+            _visibleTowers.RemoveAll(t => t.ActorID == caster.InstanceID);
+            _pending.RemoveAll(t => t.ID == caster.InstanceID);
+        }
+    }
+
+    public override void DrawArenaForeground(int pcSlot, Actor pc)
+    {
+        var towers = CollectionsMarshal.AsSpan(_visibleTowers);
+        for (var i = 0; i < towers.Length; ++i)
+        {
+            ref var tower = ref towers[i];
+            Components.GenericTowers.DrawTower(Arena, ref tower, safe: true);
+        }
     }
 
     // Cast-finished 事件偶发缺失会留下残留塔; activation 过 2s 后强制清除。
@@ -509,6 +562,8 @@ sealed class BookDropTower(BossModule module) : Components.GenericTowers(module,
     {
         var now = WorldState.CurrentTime;
         Towers.RemoveAll(t => now > t.Activation.AddSeconds(2d));
+        _visibleTowers.RemoveAll(t => now > t.Activation.AddSeconds(2d));
+        _pending.RemoveAll(t => now > t.Act.AddSeconds(2d));
         base.Update();
     }
 }
@@ -544,10 +599,8 @@ sealed class ForbiddenFoliosStates : StateMachineBuilder
     GroupID = 1093u,
     NameID = 52u,
     SortOrder = 13)]
-// Replay-verified circular arena: 14k+ player position samples cluster inside r20 with zero
-// occupancy in square corners, and book traps/mechanics stop at r~20. The Horizontal Rule lanes
-// are projected from outside (r26-36), which previously misled the bounds into a 25y square -
-// that made automation run for corner "safe spots" that are actually out of bounds.
+// The encounter floor is circular (R20). Horizontal Rule still uses 100y rectangles, but anchors
+// them at the boss center so the arena clips each one to a full diameter instead of an offset chord.
 public sealed class ForbiddenFolios(WorldState ws, Actor primary) : BossModule(ws, primary, new(659f, 659f), new ArenaBoundsCircle(20f))
 {
     protected override void DrawEnemies(int pcSlot, Actor pc)
