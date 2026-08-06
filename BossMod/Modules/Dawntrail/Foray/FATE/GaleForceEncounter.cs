@@ -109,7 +109,7 @@ sealed class GaleForceEncounterStates : StateMachineBuilder {
 }
 
 [ModuleInfo(BossModuleInfo.Maturity.Contributed,
-    StatesType = typeof(StormcallerStates),
+    StatesType = typeof(GaleForceEncounterStates),
     ConfigType = null, // replace null with typeof(StormcallerConfig) if applicable
     ObjectIDType = typeof(OID),
     ActionIDType = typeof(AID),

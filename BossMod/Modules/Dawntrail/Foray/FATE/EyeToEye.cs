@@ -40,7 +40,7 @@ sealed class EyeToEyeStates : StateMachineBuilder {
 }
 
 [ModuleInfo(BossModuleInfo.Maturity.Contributed,
-    StatesType = typeof(EvilSeerStates),
+    StatesType = typeof(EyeToEyeStates),
     ConfigType = null, // replace null with typeof(EvilSeerConfig) if applicable
     ObjectIDType = typeof(OID),
     ActionIDType = typeof(AID),

@@ -161,7 +161,7 @@ sealed class InconstantGardenerStates : StateMachineBuilder {
 }
 
 [ModuleInfo(BossModuleInfo.Maturity.Contributed,
-    StatesType = typeof(IambeStates),
+    StatesType = typeof(InconstantGardenerStates),
     ConfigType = null, // replace null with typeof(IambeConfig) if applicable
     ObjectIDType = typeof(OID),
     ActionIDType = typeof(AID),

@@ -151,38 +151,6 @@ sealed class FocusedTremorCircle(BossModule module) : Components.GenericAOEs(mod
     }
 }
 
-sealed class OctupleSwipe(BossModule module) : Components.GenericAOEs(module) {
-    private List<AOEInstance> aoes = [];
-    private readonly AOEShapeCone shape = new(40.0f, 45.0f.Degrees());
-
-    public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
-        if (spell.Action.ID == (uint)AID.OctupleSwipeVisual) {
-            aoes.Add(new(shape, spell.LocXZ, spell.Rotation));
-        }
-    }
-
-    public override void OnEventCast(Actor caster, ActorCastEvent spell) {
-        if (spell.Action.ID is (uint)AID.OctupleSwipe1 or (uint)AID.OctupleSwipe2 or (uint)AID.OctupleSwipe3) {
-            if (aoes.Count > 0) {
-                aoes.RemoveAt(0);
-            }
-        }
-    }
-
-    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) {
-        int show = 0;
-        var incomingAOEs = aoes.Take(2).ToList();
-
-        foreach (ref var aoe in CollectionsMarshal.AsSpan(incomingAOEs)) {
-            aoe.Color = show == 0 ? Colors.Danger : Colors.AOE;
-            aoe.Risky = show == 0;
-            show++;
-        }
-
-        return CollectionsMarshal.AsSpan(incomingAOEs);
-    }
-}
-
 [SkipLocalsInit]
 sealed class RagingThrallStates : StateMachineBuilder {
     public RagingThrallStates(BossModule module) : base(module) {
@@ -191,13 +159,12 @@ sealed class RagingThrallStates : StateMachineBuilder {
             .ActivateOnEnter<FocusedTremor>()
             .ActivateOnEnter<FocusedTremorCircle>()
             .ActivateOnEnter<BruntOfTheBattlefield>()
-            .ActivateOnEnter<Uplift>()
-            .ActivateOnEnter<OctupleSwipe>();
+            .ActivateOnEnter<Uplift>();
     }
 }
 
 [ModuleInfo(BossModuleInfo.Maturity.Contributed,
-    StatesType = typeof(MachetaurStates),
+    StatesType = typeof(RagingThrallStates),
     ConfigType = null, // replace null with typeof(MachetaurConfig) if applicable
     ObjectIDType = typeof(OID),
     ActionIDType = typeof(AID),

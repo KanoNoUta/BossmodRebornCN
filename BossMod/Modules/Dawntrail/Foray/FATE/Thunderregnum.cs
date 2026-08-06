@@ -109,7 +109,7 @@ sealed class ThunderregnumStates : StateMachineBuilder {
 }
 
 [ModuleInfo(BossModuleInfo.Maturity.Contributed,
-    StatesType = typeof(CrescereginaStates),
+    StatesType = typeof(ThunderregnumStates),
     ConfigType = null, // replace null with typeof(CrescereginaConfig) if applicable
     ObjectIDType = typeof(OID),
     ActionIDType = typeof(AID),

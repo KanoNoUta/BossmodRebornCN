@@ -142,7 +142,7 @@ sealed class WavedAwayStates : StateMachineBuilder {
 }
 
 [ModuleInfo(BossModuleInfo.Maturity.Contributed,
-    StatesType = typeof(ArchKelpieStates),
+    StatesType = typeof(WavedAwayStates),
     ConfigType = null, // replace null with typeof(ArchKelpieConfig) if applicable
     ObjectIDType = typeof(OID),
     ActionIDType = typeof(AID),

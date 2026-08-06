@@ -163,13 +163,6 @@ public sealed class ConfigUI : IDisposable
         ( "radar", "切换雷达显示。" ),
         ( "radar on/off", "设置雷达显示开或关。" ),
         ( "cfg", "列出所有配置。" )
-        ( "restorerotation", "切换技能使用后恢复角色面向设置。" ),
-        ( "resetcolors", "将所有颜色重置为默认值。" ),
-        ( "d", "打开调试菜单。" ),
-        ( "r", "打开回放菜单。" ),
-        ( "r on/off", "开始/停止录制回放。" ),
-        ( "gc", "触发垃圾回收。" ),
-        ( "cfg", "列出所有配置。" )
     ];
 
     private static void DrawAvailableCommands()

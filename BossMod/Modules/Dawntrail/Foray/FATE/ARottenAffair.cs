@@ -56,7 +56,7 @@ sealed class ARottenAffairStates : StateMachineBuilder {
 }
 
 [ModuleInfo(BossModuleInfo.Maturity.Contributed,
-    StatesType = typeof(PatientKuribuStates),
+    StatesType = typeof(ARottenAffairStates),
     ConfigType = null, // replace null with typeof(PatientKuribuConfig) if applicable
     ObjectIDType = typeof(OID),
     ActionIDType = typeof(AID),
