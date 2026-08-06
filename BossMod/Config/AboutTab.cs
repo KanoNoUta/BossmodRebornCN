@@ -18,48 +18,48 @@ public sealed class AboutTab(DirectoryInfo? replayDir)
     {
         using var wrap = ImRaii.TextWrapPos(0);
 
-        ImGui.TextUnformatted("BossModReborn (BMR) provides boss fight radar, auto-rotation, cooldown planning, and AI. All of its modules can be toggled individually. Support for it can be found in the Discord server linked at the bottom of this tab.");
-        ImGui.TextUnformatted("This is a FORK of the original BossMod (VBM). Only ask for support on the Combat Reborn Discord.");
-        ImGui.TextUnformatted("Please also make sure to not load VBM and this fork at the same time. The consequences of doing that are unexplored and unsupported.");
+        ImGui.TextUnformatted("BossModReborn（BMR）提供 Boss 战斗雷达、自动循环、冷却规划和 AI 功能。所有模块均可单独开关。如需支持，请前往本标签页底部链接的 Discord 服务器。");
+        ImGui.TextUnformatted("这是原始 BossMod（VBM）的分支版本。请在 Combat Reborn Discord 寻求支持。");
+        ImGui.TextUnformatted("请确保不要同时加载 VBM 和此分支，同时使用两者的后果未知且不受支持。");
         ImGui.Spacing();
-        DrawSection("Radar",
+        DrawSection("雷达",
         [
-            "Provides an on-screen window that contains an area mini-map showing player positions, boss position(s), various imminent AOEs, and other mechanics.",
-            "Useful because you don't have to remember what ability names mean.",
-            "See exactly whether you're getting clipped by incoming AOEs or not.",
-            "Enabled for supported bosses, visible in the \"Supported bosses\" tab.",
+            "提供屏幕上的窗口，显示区域小地图，包含玩家位置、Boss位置、各种即将到来的AOE和其他机制。",
+            "实用之处在于你不需要记住技能名称的含义。",
+            "精确显示你是否会吃到即将到来的AOE。",
+            "对支持的Boss可用，可在\"支持的战斗\"标签页中查看。",
         ]);
         ImGui.Spacing();
-        DrawSection("Autorotation",
+        DrawSection("自动循环",
         [
-            "Executes fully optimal rotations to the best of its ability.",
-            "Go to the \"Autorotation presets\" tab to create a preset.",
-            "Maturity of each rotation module is present in a tooltip.",
-            "Guide for using this feature can be found on the wiki.",
+            "尽可能执行完全优化的循环。",
+            "前往\"自动循环预设\"标签页创建预设。",
+            "各循环模块的成熟度可在提示中查看。",
+            "使用此功能请参考 Wiki 上的指南。",
         ]);
         ImGui.Spacing();
-        DrawSection("Cooldown planner",
+        DrawSection("冷却规划",
         [
-            "Creates a CD plan for supported bosses.",
-            "Replaces autorotations in specific fights.",
-            "Allows you to time specific abilities to cast at specific times.",
-            "Guide for using this feature can be found on the wiki.",
+            "为支持的Boss创建冷却规划。",
+            "在特定战斗中替代自动循环。",
+            "允许你为特定技能安排在特定时间施放。",
+            "使用此功能请参考 Wiki 上的指南。",
         ]);
         ImGui.Spacing();
         DrawSection("AI",
         [
-            "Automates movement during boss fights.",
-            "Automatically moves your character based on safe zones determined by a boss's module, visible on the radar.",
-            "Should not be used in when playing with unknown players.",
-            "Can be hooked by other plugins to automate entire duties.",
+            "在Boss战斗中自动化移动。",
+            "根据Boss模块确定的安全区域（在雷达上可见）自动移动你的角色。",
+            "不应在与陌生人组队时使用。",
+            "可被其他插件调用以实现全副本自动化。",
         ]);
         ImGui.Spacing();
-        DrawSection("Replays",
+        DrawSection("回放",
         [
-            "Useful for creating boss modules, analyzing problems with them, and making CD plans.",
-            "When asking for help, make sure to provide a replay! Please note that replays will contain your player name!",
-            "Enabled in Settings > Show replay management UI (or enable auto recording).",
-            $"Files are located in '{replayDir}'.",
+            "用于创建Boss模块、分析问题以及制作冷却规划。",
+            "寻求帮助时，请务必提供回放文件！请注意回放会包含你的角色名称！",
+            "在 设置 > 显示回放管理界面 中启用（或启用自动录制）。",
+            $"回放文件位于 '{replayDir}'。",
         ]);
         ImGui.Spacing();
         ImGui.Spacing();
@@ -135,7 +135,7 @@ public sealed class AboutTab(DirectoryInfo? replayDir)
         catch (Exception e)
         {
             Service.Log($"Error opening link {link}: {e}");
-            return $"Failed to open link '{link}', open it manually in the browser.";
+            return $"无法打开链接 '{link}'，请在浏览器中手动打开。";
         }
     }
 
@@ -143,7 +143,7 @@ public sealed class AboutTab(DirectoryInfo? replayDir)
     {
         if (!dir.Exists)
         {
-            return $"Directory '{dir}' not found.";
+            return $"目录 '{dir}' 未找到。";
         }
 
         try
@@ -154,7 +154,7 @@ public sealed class AboutTab(DirectoryInfo? replayDir)
         catch (Exception e)
         {
             Service.Log($"Error opening directory {dir}: {e}");
-            return $"Failed to open folder '{dir}', open it manually.";
+            return $"无法打开文件夹 '{dir}'，请手动打开。";
         }
     }
 }

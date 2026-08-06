@@ -1,48 +1,48 @@
 ﻿namespace BossMod.Autorotation;
 
-[ConfigDisplay(Name = "Autorotation (Unsupported by Combat Reborn)", Order = 5)]
+[ConfigDisplay(Name = "自动循环（非 Combat Reborn 支持）", Order = 5)]
 public sealed class AutorotationConfig : ConfigNode
 {
-    [PropertyDisplay("Show in-game UI")]
+    [PropertyDisplay("显示游戏内界面")]
     public bool ShowUI = false;
 
     public enum DtrStatus
     {
-        [PropertyDisplay("Disabled")]
+        [PropertyDisplay("禁用")]
         None,
-        [PropertyDisplay("Text only")]
+        [PropertyDisplay("仅文字")]
         TextOnly,
-        [PropertyDisplay("With icon")]
+        [PropertyDisplay("图标")]
         Icon
     }
 
-    [PropertyDisplay("Show autorotation preset in the server info bar")]
+    [PropertyDisplay("在服务器信息栏显示自动循环预设")]
     public DtrStatus ShowDTR = DtrStatus.None;
 
-    [PropertyDisplay("Hide VBM Default preset", tooltip: "If you've created your own presets and no longer need the included default, this option will prevent it from being shown in the Autorotation and Preset Editor windows.")]
+    [PropertyDisplay("隐藏 VBM 默认预设", tooltip: "如果你已创建了自己的预设且不再需要内置默认预设，此选项将阻止其在自动循环和预设编辑器窗口中显示。")]
     public bool HideDefaultPresets = true;
 
     public bool SuggestHealerAI = true;
 
-    [PropertyDisplay("Show positional hints in world", tooltip: "Show tips for positional abilities, indicating to move to the flank or rear of your target")]
+    [PropertyDisplay("显示身位提示", tooltip: "显示身位技能提示，指示移动到目标侧面或背面")]
     public bool ShowPositionals = false;
 
     [PropertyDisplay("Follow RotationSolverReborn's desired positional", tooltip: "When enabled, the 'Misc AI: Goes to specified positional' rotation module will override its Positional track setting and instead use the positional currently requested by RotationSolverReborn over IPC (Does not apply to Target Dummies)")]
     public bool FollowRSRDesiredPositional = true;
 
-    [PropertyDisplay("Automatically disable autorotation on death")]
+    [PropertyDisplay("死亡时自动关闭自动循环")]
     public bool ClearPresetOnDeath = true;
 
-    [PropertyDisplay("Automatically disable autorotation when exiting combat")]
+    [PropertyDisplay("脱战时自动关闭自动循环")]
     public bool ClearPresetOnCombatEnd = false;
 
-    [PropertyDisplay("Automatically disable autorotation if a Luring Trap is triggered", tooltip: "Only applicable in Deep Dungeons")]
+    [PropertyDisplay("触发诱饵陷阱时自动关闭自动循环", tooltip: "仅适用于深层迷宫")]
     public bool ClearPresetOnLuring = false;
 
-    [PropertyDisplay("Automatically reenable force-disabled autorotation when exiting combat")]
+    [PropertyDisplay("脱战时自动重新启用强制关闭的自动循环")]
     public bool ClearForceDisableOnCombatEnd = true;
 
-    [PropertyDisplay("Early pull threshold", tooltip: "If someone enters combat with a boss when the countdown is longer than this value, it's consider a ninja-pull and autorotation is force disabled")]
+    [PropertyDisplay("提前开怪阈值", tooltip: "倒计时大于此值时有人进入战斗，视为抢开，自动循环将被强制关闭")]
     [PropertySlider(0, 30, Speed = 1)]
     public float EarlyPullThreshold = 1.5f;
 

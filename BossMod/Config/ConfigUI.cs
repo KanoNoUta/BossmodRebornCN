@@ -39,11 +39,11 @@ public sealed class ConfigUI : IDisposable
         _mv = new(rotationDB?.Plans, ws);
         _presets = rotationDB != null ? new(rotationDB) : null;
 
-        _tabs.Add("Settings", DrawSettings);
-        _tabs.Add("Supported fights", () => _mv.Draw(_tree, _ws));
-        _tabs.Add("Autorotation presets", () => _presets?.Draw());
-        _tabs.Add("Slash commands", DrawAvailableCommands);
-        _tabs.Add("About", _about.Draw);
+        _tabs.Add("设置", DrawSettings);
+        _tabs.Add("支持的战斗", () => _mv.Draw(_tree, _ws));
+        _tabs.Add("自动循环预设", () => _presets?.Draw());
+        _tabs.Add("斜杠命令", DrawAvailableCommands);
+        _tabs.Add("关于", _about.Draw);
 
         Dictionary<Type, UINode> nodes = [];
         var nodes2 = _root.Nodes;
@@ -89,7 +89,7 @@ public sealed class ConfigUI : IDisposable
     private void DrawSettings()
     {
         ImGui.SetNextItemWidth(300);
-        if (ImGui.InputTextEx("", "Search for a setting...", ref _searchText))
+        if (ImGui.InputTextEx("", "搜索设置项...", ref _searchText))
         {
             FilterNodes();
         }
@@ -97,7 +97,7 @@ public sealed class ConfigUI : IDisposable
         ImGui.SameLine();
         using (ImRaii.Disabled(_searchText.Length == 0))
         {
-            if (ImGui.Button("Clear"))
+            if (ImGui.Button("清除"))
             {
                 _searchText = "";
                 FilterNodes();
@@ -109,66 +109,74 @@ public sealed class ConfigUI : IDisposable
 
     private static readonly (string, string)[] _availableAICommands =
     [
-        ( "on", "Enables the AI." ),
-        ( "off", "Disables the AI." ),
-        ( "toggle", "Toggles the AI on/off." ),
-        ( "targetmaster", "Toggles the focus on target leader." ),
-        ( "follow slotX", "Follows the specified slot, eg. Slot1." ),
-        ( "follow name", "Follows the specified party member by name." ),
-        ( "ui", "Toggles the AI menu." ),
-        ( "forbidactions", "Toggles the forbidding of actions. (only for autorotation)" ),
-        ( "forbidactions on/off", "Sets forbid actions to on or off. (only for autorotation)" ),
-        ( "forbidmovement", "Toggles the forbidding of movement." ),
-        ( "forbidmovement on/off", "Sets forbid movement to on or off." ),
-        ( "idlewhilemounted", "Toggles the idling while mounted." ),
-        ( "idlewhilemounted on/off", "Sets idle while mounted to on or off." ),
-        ( "followcombat", "Toggles following during combat." ),
-        ( "followcombat on/off", "Sets following following during combat to on or off." ),
-        ( "followmodule", "Toggles following during active boss module." ),
-        ( "followmodule on/off", "Sets following following during active boss module to on or off." ),
-        ( "followoutofcombat", "Toggles following during out of combat." ),
-        ( "followoutofcombat on/off", "Sets following target out of combat to on or off." ),
-        ( "followtarget", "Toggles following targets during combat." ),
-        ( "followtarget on/off", "Sets following target during combat to on or off." ),
-        ( "positional X", "Switch to positional when following targets. (any, rear, flank, front)" ),
-        ( "maxdistancetarget X", "Sets max distance to target. (default = 2.6)" ),
-        ( "maxdistanceslot X", "Sets max distance to slot. (default = 1)" ),
-        ( "mindistance X", "Sets min distance to hitbox. (default = 0)" ),
-        ( "prefdistance X", "Sets preferred distance to forbidden zones. (default = 0)" ),
-        ( "movedelay X", "Sets AI movement decision delay. (default = 0)" ),
-        ( "obstaclemaps", "Toggles loading obstacle maps." ),
-        ( "obstaclemaps on/off", "Sets the loading of obstacle maps to on or off." ),
-        ( "setpresetname X", "Sets an autorotation preset for the AI, eg. setpresetname vbm default." )
+        ( "on", "启用 AI。" ),
+        ( "off", "禁用 AI。" ),
+        ( "toggle", "切换 AI 开关。" ),
+        ( "targetmaster", "切换跟随目标队长。" ),
+        ( "follow slotX", "跟随指定槽位，例如 Slot1。" ),
+        ( "follow name", "按名称跟随指定队伍成员。" ),
+        ( "ui", "切换 AI 菜单。" ),
+        ( "forbidactions", "切换禁止使用技能（仅自动循环）。" ),
+        ( "forbidactions on/off", "设置禁止使用技能为开或关（仅自动循环）。" ),
+        ( "forbidmovement", "切换禁止移动。" ),
+        ( "forbidmovement on/off", "设置禁止移动为开或关。" ),
+        ( "idlewhilemounted", "切换骑乘时空闲。" ),
+        ( "idlewhilemounted on/off", "设置骑乘时空闲为开或关。" ),
+        ( "followcombat", "切换战斗中跟随。" ),
+        ( "followcombat on/off", "设置战斗中跟随为开或关。" ),
+        ( "followmodule", "切换Boss模块激活时跟随。" ),
+        ( "followmodule on/off", "设置Boss模块激活时跟随为开或关。" ),
+        ( "followoutofcombat", "切换脱战时跟随。" ),
+        ( "followoutofcombat on/off", "设置脱战时跟随为开或关。" ),
+        ( "followtarget", "切换战斗中跟随目标。" ),
+        ( "followtarget on/off", "设置战斗中跟随目标为开或关。" ),
+        ( "positional X", "跟随目标时切换身位（any, rear, flank, front）。" ),
+        ( "maxdistancetarget X", "设置到目标的最大距离（默认 = 2.6）。" ),
+        ( "maxdistanceslot X", "设置到槽位玩家的最大距离（默认 = 1）。" ),
+        ( "mindistance X", "设置到碰撞体的最小距离（默认 = 0）。" ),
+        ( "prefdistance X", "设置到禁区的偏好距离（默认 = 0）。" ),
+        ( "movedelay X", "设置AI移动决策延迟（默认 = 0）。" ),
+        ( "obstaclemaps", "切换加载障碍地图。" ),
+        ( "obstaclemaps on/off", "设置加载障碍地图为开或关。" ),
+        ( "setpresetname X", "设置AI的自动循环预设，例如 setpresetname vbm default。" )
     ];
 
     private static readonly (string, string)[] _autorotationCommands =
     [
-        ( "ar clear", "Clear current preset; autorotation will do nothing unless plan is active" ),
-        ( "ar disable", "Force disable autorotation; no actions will be executed automatically even if plan is active." ),
-        ( "ar set Preset", "Start executing specified preset." ),
-        ( "ar toggle", "Force disable autorotation if not already; otherwise clear overrides." ),
-        ( "ar toggle Preset", "Start executing specified preset unless it's already active; clear otherwise" ),
-        ( "ar ui", "Toggle autorotation ui." ),
+        ( "ar clear", "清除当前预设；自动循环不会执行任何操作，除非有计划处于活动状态" ),
+        ( "ar disable", "强制关闭自动循环；即使有计划处于活动状态也不会自动执行任何操作。" ),
+        ( "ar set Preset", "开始执行指定预设。" ),
+        ( "ar toggle", "如果尚未强制关闭则强制关闭自动循环；否则清除覆盖。" ),
+        ( "ar toggle Preset", "如果指定预设尚未激活则开始执行它；否则清除。" ),
+        ( "ar ui", "切换自动循环界面。" ),
     ];
 
     private static readonly (string, string)[] _availableOtherCommands =
     [
-        ( "restorerotation", "Toggle restore character orientation after action use setting." ),
-        ( "resetcolors", "Resets all colors to their default values." ),
-        ( "d", "Opens the debug menu." ),
-        ( "r", "Opens the replay menu." ),
-        ( "r on/off", "Starts/stops recording a replay." ),
-        ( "gc", "Triggers the garbage collection." ),
-        ( "radar", "toggles radar display" ),
-        ( "radar on/off", "Sets radar display to on or off." ),
-        ( "cfg", "Lists all configs." )
+        ( "restorerotation", "切换技能使用后恢复角色面向设置。" ),
+        ( "restorerotation", "切换技能使用后恢复角色面向设置。" ),
+        ( "resetcolors", "将所有颜色重置为默认值。" ),
+        ( "d", "打开调试菜单。" ),
+        ( "r", "打开回放菜单。" ),
+        ( "r on/off", "开始/停止录制回放。" ),
+        ( "gc", "触发垃圾回收。" ),
+        ( "radar", "切换雷达显示。" ),
+        ( "radar on/off", "设置雷达显示开或关。" ),
+        ( "cfg", "列出所有配置。" )
+        ( "restorerotation", "切换技能使用后恢复角色面向设置。" ),
+        ( "resetcolors", "将所有颜色重置为默认值。" ),
+        ( "d", "打开调试菜单。" ),
+        ( "r", "打开回放菜单。" ),
+        ( "r on/off", "开始/停止录制回放。" ),
+        ( "gc", "触发垃圾回收。" ),
+        ( "cfg", "列出所有配置。" )
     ];
 
     private static void DrawAvailableCommands()
     {
-        ImGui.Text("Available Commands:");
+        ImGui.Text("可用命令：");
         ImGui.Separator();
-        ImGui.Text("AI:");
+        ImGui.Text("AI：");
         ImGui.Separator();
         for (var i = 0; i < 30; ++i)
         {
@@ -176,7 +184,7 @@ public sealed class ConfigUI : IDisposable
             ImGui.Text($"/bmrai {text.Item1}: {text.Item2}");
         }
         ImGui.Separator();
-        ImGui.Text("Autorotation commands:");
+        ImGui.Text("自动循环命令：");
         ImGui.Separator();
         for (var i = 0; i < 6; ++i)
         {
@@ -184,7 +192,7 @@ public sealed class ConfigUI : IDisposable
             ImGui.Text($"/bmr {text.Item1}: {text.Item2}");
         }
         ImGui.Separator();
-        ImGui.Text("Other commands:");
+        ImGui.Text("其他命令：");
         ImGui.Separator();
         for (var i = 0; i < 9; ++i)
         {
@@ -555,7 +563,7 @@ public sealed class ConfigUI : IDisposable
         }
         if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip("Select a preset");
+            ImGui.SetTooltip("选择预设");
         }
 
         ImGui.SameLine();

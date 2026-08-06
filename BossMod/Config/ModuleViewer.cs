@@ -186,14 +186,14 @@ public sealed class ModuleViewer : IDisposable
         ImGui.TableNextColumn();
         ImGui.TableNextColumn(); //spacing with only one seemed to be a bit small on certain window sizes
         ImGui.AlignTextToFramePadding();
-        ImGui.Text("Search:");
+        ImGui.Text("搜索：");
         ImGui.SameLine();
         ImGui.SetNextItemWidth(-1);
         DrawSearchBar();
         ImGui.TableNextColumn();
 
         ImGui.TableNextColumn();
-        ImGui.TableHeader("Expansion");
+        ImGui.TableHeader("资料片");
         ImGui.TableNextRow(ImGuiTableRowFlags.None);
         ImGui.TableNextColumn();
         DrawExpansionFilters();
@@ -201,7 +201,7 @@ public sealed class ModuleViewer : IDisposable
         ImGui.TableNextRow();
 
         ImGui.TableNextColumn();
-        ImGui.TableHeader("Content");
+        ImGui.TableHeader("内容类型");
         ImGui.TableNextRow(ImGuiTableRowFlags.None);
         ImGui.TableNextColumn();
         DrawContentTypeFilters();
@@ -209,12 +209,12 @@ public sealed class ModuleViewer : IDisposable
 
     private void DrawSearchBar()
     {
-        ImGui.InputTextWithHint("##search", "e.g. \"Ultimate\"", ref _searchText, 100, ImGuiInputTextFlags.CallbackCompletion);
+        ImGui.InputTextWithHint("##search", "例如 \"绝境战\"", ref _searchText, 100, ImGuiInputTextFlags.CallbackCompletion);
 
         if (ImGui.IsItemHovered() && !ImGui.IsItemFocused())
         {
             ImGui.BeginTooltip();
-            ImGui.Text("Type here to search for any specific instance by its respective title.");
+            ImGui.Text("在此输入以按标题搜索特定副本。");
             ImGui.EndTooltip();
         }
     }
@@ -371,10 +371,10 @@ public sealed class ModuleViewer : IDisposable
                 groupId |= module.GroupID;
                 var mcRow = Service.LuminaRow<ContentFinderCondition>(module.GroupID)!.Value;
                 var mcSort = uint.Parse(mcRow.ShortCode.ToString().AsSpan(3), CultureInfo.InvariantCulture); // 'aozNNN'
-                var mcName = $"Stage {mcSort}: {FixCase(mcRow.Name)}";
+                var mcName = $"第{mcSort}关: {FixCase(mcRow.Name)}";
                 return (new(mcName, groupId, mcSort), new(module, BNpcName(module.NameID), module.SortOrder));
             case BossModuleInfo.GroupType.RemovedUnreal:
-                return (new("Removed Content", groupId, groupId), new(module, BNpcName(module.NameID), module.SortOrder));
+                return (new("已移除内容", groupId, groupId), new(module, BNpcName(module.NameID), module.SortOrder));
             case BossModuleInfo.GroupType.BaldesionArsenal:
                 return (new("Baldesion Arsenal", groupId, groupId), new(module, BNpcName(module.NameID), module.SortOrder));
             case BossModuleInfo.GroupType.CastrumLacusLitore:
@@ -411,19 +411,19 @@ public sealed class ModuleViewer : IDisposable
                 var nmName = FixCase(Service.LuminaRow<ContentFinderCondition>(module.GroupID)!.Value.Name);
                 return (new(nmName, groupId, groupId), new(module, Service.LuminaRow<Fate>(module.NameID)!.Value.Name.ToString(), module.SortOrder));
             case BossModuleInfo.GroupType.GoldSaucer:
-                return (new("Gold Saucer", groupId, groupId), new(module, $"{Service.LuminaRow<GoldSaucerTextData>(module.GroupID)?.Text}: {BNpcName(module.NameID)}", module.SortOrder));
+                return (new("金碟游乐场", groupId, groupId), new(module, $"{Service.LuminaRow<GoldSaucerTextData>(module.GroupID)?.Text}: {BNpcName(module.NameID)}", module.SortOrder));
             default:
-                return (new("Uncategorized", groupId, groupId), new(module, BNpcName(module.NameID), module.SortOrder));
+                return (new("未分组", groupId, groupId), new(module, BNpcName(module.NameID), module.SortOrder));
         }
     }
 
     private string ModuleHelpText(ModuleInfo info)
     {
         var sb = new StringBuilder();
-        sb.AppendLine(CultureInfo.CurrentCulture, $"Cooldown planning: {(info.Info.PlanLevel > 0 ? $"L{info.Info.PlanLevel}" : "not supported")}");
+        sb.AppendLine(CultureInfo.CurrentCulture, $"冷却规划: {(info.Info.PlanLevel > 0 ? $"L{info.Info.PlanLevel}" : "不支持")}");
         if (info.Info.Contributors.Length > 0)
         {
-            sb.AppendLine(CultureInfo.CurrentCulture, $"Contributors: {info.Info.Contributors}");
+            sb.AppendLine(CultureInfo.CurrentCulture, $"贡献者: {info.Info.Contributors}");
         }
 
         return sb.ToString();
@@ -441,7 +441,7 @@ public sealed class ModuleViewer : IDisposable
         {
             foreach (var plan in plans.Plans)
             {
-                if (ImGui.Selectable($"Edit {cls} '{plan.Name}' ({plan.Guid})"))
+                if (ImGui.Selectable($"编辑 {cls} '{plan.Name}' ({plan.Guid})"))
                 {
                     UIPlanDatabaseEditor.StartPlanEditor(_planDB, plan);
                 }
@@ -451,7 +451,7 @@ public sealed class ModuleViewer : IDisposable
         var player = _ws.Party.Player();
         if (player != null)
         {
-            if (ImGui.Selectable($"New plan for {player.Class}..."))
+            if (ImGui.Selectable($"为 {player.Class} 新建规划..."))
             {
                 var plans = mplans.GetOrAdd(player.Class);
                 var plan = new Plan($"New {plans.Plans.Count + 1}", info.ModuleType) { Guid = Guid.NewGuid().ToString(), Class = player.Class, Level = info.PlanLevel };

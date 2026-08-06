@@ -3,6 +3,6 @@
 [ConfigDisplay(Parent = typeof(ActionTweaksConfig))]
 class SCHConfig : ConfigNode
 {
-    [PropertyDisplay("Prevent use of 'Broil' too early when in pre-pull")]
+    [PropertyDisplay("预读阶段禁止过早使用死炎法")]
     public bool ForbidEarlyBroil = true;
 }
