@@ -2,121 +2,121 @@
 
 namespace BossMod;
 
-[ConfigDisplay(Name = "Boss modules and radar", Order = 1)]
+[ConfigDisplay(Name = "首领模块与雷达", Order = 1)]
 public sealed class BossModuleConfig : ConfigNode
 {
     public override void DrawCustom(UITree tree, WorldState ws)
     {
-        if (ImGui.Button("Recenter Window"))
+        if (ImGui.Button("窗口重新居中"))
         {
             Service.BossModWindow?.RecenterWindow();
         }
     }
 
     // boss module settings
-    [PropertyDisplay("Minimal maturity for the module to be loaded", tooltip: "Some modules will have the \"WIP\" status and will not automatically load unless you change this")]
+    [PropertyDisplay("加载模块所需的最低完成度", tooltip: "部分模块处于“开发中”状态，除非修改此设置，否则不会自动加载。")]
     public BossModuleInfo.Maturity MinMaturity = BossModuleInfo.Maturity.Contributed;
 
-    [PropertyDisplay("Allow modules to automatically use actions", tooltip: "Example: modules can automatically use anti-knockback abilities before a knockback happens")]
+    [PropertyDisplay("允许模块自动使用技能", tooltip: "例如：模块可以在击退发生前自动使用防击退技能。")]
     public bool AllowAutomaticActions = true;
 
-    [PropertyDisplay("Show testing radar and hint window", tooltip: "Useful for configuring your radar and hint windows without being inside of a boss encounter", separator: true)]
+    [PropertyDisplay("显示测试雷达和提示窗口", tooltip: "无需进入首领战即可调整雷达和提示窗口。", separator: true)]
     public bool ShowDemo = false;
 
     // radar window settings
-    [PropertyDisplay("Enable radar")]
+    [PropertyDisplay("启用雷达")]
     public bool Enable = true;
 
-    [PropertyDisplay("Lock radar and hint window movement and mouse interaction")]
+    [PropertyDisplay("锁定雷达和提示窗口的位置及鼠标交互")]
     public bool Lock = false;
 
-    [PropertyDisplay("Transparent radar window background", tooltip: "Removes the black window around the radar; this will not work if you move the radar to a different monitor")]
+    [PropertyDisplay("雷达窗口背景透明", tooltip: "移除雷达周围的黑色窗口背景；如果将雷达移到其他显示器，此功能可能失效。")]
     public bool TrishaMode = true;
 
-    [PropertyDisplay("Add opaque background to the arena in the radar")]
+    [PropertyDisplay("为雷达场地添加不透明背景")]
     public bool OpaqueArenaBackground = true;
 
-    [PropertyDisplay("Show outlines and shadows on various radar markings")]
+    [PropertyDisplay("显示雷达标记的轮廓和阴影")]
     public bool ShowOutlinesAndShadows = true;
 
-    [PropertyDisplay("Radar arena scale factor", tooltip: "Scale of the arena inside of the radar window")]
+    [PropertyDisplay("雷达场地缩放比例", tooltip: "雷达窗口内场地的缩放比例。")]
     [PropertySlider(0.1f, 10, Speed = 0.1f, Logarithmic = true)]
     public float ArenaScale = 1;
 
-    [PropertyDisplay("Radar element thickness scale factor", tooltip: "Globally scales the outline thickness of radar elements")]
+    [PropertyDisplay("雷达元素线条粗细比例", tooltip: "统一缩放雷达元素的轮廓粗细。")]
     [PropertySlider(0.1f, 10, Speed = 0.1f, Logarithmic = true)]
     public float ThicknessScale = 1;
 
-    [PropertyDisplay("Rotate radar to match camera orientation")]
+    [PropertyDisplay("旋转雷达以匹配镜头方向")]
     public bool RotateArena = true;
 
-    [PropertyDisplay("Rotate map by 180° if rotating map is off")]
+    [PropertyDisplay("关闭地图旋转时将地图旋转 180°")]
     public bool FlipArena = false;
 
-    [PropertyDisplay("Give radar extra space for rotations", tooltip: "If you are using the above setting, you can give the radar extra space on the sides before the edges are clipped in order to account for rotating your camera during an encounter or to give the cardinal directions space.")]
+    [PropertyDisplay("为雷达旋转预留额外空间", tooltip: "使用上方设置时，可在雷达边缘裁切前预留额外空间，避免战斗中旋转镜头或显示方位文字时内容被裁掉。")]
     [PropertySlider(1, 2, Speed = 0.1f, Logarithmic = true)]
     public float SlackForRotations = 1.5f;
 
-    [PropertyDisplay("Show arena border in radar")]
+    [PropertyDisplay("在雷达中显示场地边界")]
     public bool ShowBorder = true;
 
-    [PropertyDisplay("Change arena border color if player is at risk", tooltip: "Changes the white border to red when you are standing somewhere you are likely to be hit by a mechanic")]
+    [PropertyDisplay("玩家处于危险时改变场地边界颜色", tooltip: "当玩家站在可能被机制命中的位置时，将白色边界改为红色。")]
     public bool ShowBorderRisk = true;
 
-    [PropertyDisplay("Show cardinal direction names on radar")]
+    [PropertyDisplay("在雷达中显示方位名称")]
     public bool ShowCardinals = false;
 
-    [PropertyDisplay("Cardinal direction font size")]
+    [PropertyDisplay("方位名称字号")]
     [PropertySlider(0.1f, 100, Speed = 1)]
     public float CardinalsFontSize = 17f;
 
-    [PropertyDisplay("Waymark font size")]
+    [PropertyDisplay("场地标点字号")]
     [PropertySlider(0.1f, 100, Speed = 1)]
     public float WaymarkFontSize = 22f;
 
-    [PropertyDisplay("Actor triangle scale factor")]
+    [PropertyDisplay("角色三角标记缩放比例")]
     [PropertySlider(0.1f, 10, Speed = 0.1f)]
     public float ActorScale = 1f;
 
-    [PropertyDisplay("Show waymarks on radar")]
+    [PropertyDisplay("在雷达中显示场地标点")]
     public bool ShowWaymarks = false;
 
-    [PropertyDisplay("Show signs on radar ('attack', 'bind', 'ignore', and shape markers)")]
+    [PropertyDisplay("在雷达中显示目标标记（攻击、止步、禁止及形状标记）")]
     public bool ShowSigns = false;
 
-    [PropertyDisplay("Always show all alive party members")]
+    [PropertyDisplay("始终显示所有存活的队员")]
     public bool ShowIrrelevantPlayers = false;
 
-    [PropertyDisplay("Show role-based colors on otherwise uncolored players in the radar")]
+    [PropertyDisplay("按职能为雷达中未着色的玩家上色")]
     public bool ColorPlayersBasedOnRole = false;
 
-    [PropertyDisplay("Always show focus targeted party member", separator: true)]
+    [PropertyDisplay("始终显示被设为焦点目标的队员", separator: true)]
     public bool ShowFocusTargetPlayer = false;
 
     // hint window settings
-    [PropertyDisplay("Show text hints in separate window", tooltip: "Separates the radar window from the hints window, allowing you to reposition the hints window")]
+    [PropertyDisplay("在独立窗口中显示文字提示", tooltip: "将提示窗口与雷达窗口分离，以便单独调整提示窗口的位置。")]
     public bool HintsInSeparateWindow = false;
 
-    [PropertyDisplay("Make separate hints window transparent")]
+    [PropertyDisplay("使独立提示窗口透明")]
     public bool HintsInSeparateWindowTransparent = false;
 
-    [PropertyDisplay("Show mechanic sequence and timer hints")]
+    [PropertyDisplay("显示机制顺序和计时提示")]
     public bool ShowMechanicTimers = true;
 
-    [PropertyDisplay("Show raidwide hints")]
+    [PropertyDisplay("显示全队提示")]
     public bool ShowGlobalHints = true;
 
-    [PropertyDisplay("Show player hints and warnings", separator: true)]
+    [PropertyDisplay("显示玩家提示和警告", separator: true)]
     public bool ShowPlayerHints = true;
 
     // misc. settings
-    [PropertyDisplay("Show movement hints in world", tooltip: "Not used very much, but can show you arrows in the game world to indicate where to move for certain mechanics")]
+    [PropertyDisplay("在游戏世界中显示移动提示", tooltip: "部分机制会在游戏世界中显示箭头，指示应移动到的位置。")]
     public bool ShowWorldArrows = false;
 
-    [PropertyDisplay("Show melee range indicator")]
+    [PropertyDisplay("显示近战范围指示器")]
     public bool ShowMeleeRangeIndicator = false;
 
-    [PropertyDisplay("Maximum load distance", tooltip: "Maximum load distance in yalms")]
+    [PropertyDisplay("最大加载距离", tooltip: "最大加载距离，单位为亚姆。")]
     [PropertySlider(0.1f, 500f, Speed = 0.1f, Logarithmic = true)]
     public float MaxLoadDistance = 500f;
 }

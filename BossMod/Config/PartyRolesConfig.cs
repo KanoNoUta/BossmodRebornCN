@@ -6,7 +6,7 @@ using Dalamud.Interface.Utility.Raii;
 
 namespace BossMod;
 
-[ConfigDisplay(Name = "Party roles assignment", Order = 2)]
+[ConfigDisplay(Name = "队伍职能分配", Order = 2)]
 public class PartyRolesConfig : ConfigNode
 {
     public enum Assignment { MT, OT, H1, H2, M1, M2, R1, R2, Unassigned }
@@ -14,7 +14,7 @@ public class PartyRolesConfig : ConfigNode
     [PropertyDisplay("切换区域时自动分配职能")]
     public bool AutoAssignOnDutyEnter = false;
 
-    [PropertyDisplay("Preferred auto-assigned role", tooltip: "Only applied when auto-assigning roles (via the 'Auto-Assign Roles' button or on zone change when that option is enabled). Biases the player toward the chosen slot when their job matches the role; otherwise it falls back to the default logic.")]
+    [PropertyDisplay("自动分配时的首选职能", tooltip: "仅在自动分配职能时生效（点击“自动分配职能”按钮，或启用切换区域时自动分配）。当玩家职业符合该职能时优先分配到所选位置，否则使用默认分配逻辑。")]
     public Assignment PreferredAutoAssignedRole = Assignment.Unassigned;
 
     public Dictionary<ulong, Assignment> Assignments = [];

@@ -5,6 +5,10 @@ sealed class IndexStates : StateMachineBuilder
 {
     public IndexStates(BossModule module) : base(module)
     {
-        TrivialPhase();
+        TrivialPhase()
+            .ActivateOnEnter<IndexAOEs>()
+            .ActivateOnEnter<ElementalSectors>()
+            .ActivateOnEnter<PropulsiveShockwave>()
+            .ActivateOnEnter<AllConsumingFlames>();
     }
 }

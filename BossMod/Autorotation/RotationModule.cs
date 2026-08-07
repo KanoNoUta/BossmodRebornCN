@@ -4,19 +4,19 @@ namespace BossMod.Autorotation;
 
 public enum RotationModuleQuality
 {
-    [PropertyDisplay("Work-in-progress - expect it to break a lot (or just be straight broken)")]
+    [PropertyDisplay("开发中：可能经常出错，甚至完全无法工作")]
     WIP,
 
-    [PropertyDisplay("Basic - expect the standard rotation to work, but not much more - suitable for leveling or casual content, expect green/blue logs")]
+    [PropertyDisplay("基础：标准循环可用但功能有限，适合升级或休闲内容，预期为绿/蓝色日志")]
     Basic,
 
-    [PropertyDisplay("OK - expect to execute reasonable actions in most circumstances, recover from deaths, have basic planning support - suitable for savages, expect blue/purple logs")]
+    [PropertyDisplay("合格：大多数情况下能合理使用技能，可从死亡中恢复并提供基础规划支持，适合零式，预期为蓝/紫色日志")]
     Ok,
 
-    [PropertyDisplay("Good - expect to execute optimal actions in most cases, and planner should cover the remaining situations - suitable for all content, expect purple/orange logs")]
+    [PropertyDisplay("良好：大多数情况下使用最优技能，规划器可覆盖其余情况，适合所有内容，预期为紫/橙色日志")]
     Good,
 
-    [PropertyDisplay("Excellent - expect to be able to get orange/pink logs consistently if you utilize planner correctly")]
+    [PropertyDisplay("优秀：正确使用规划器时，预期可稳定获得橙/粉色日志")]
     Excellent,
 
     Count
@@ -24,13 +24,13 @@ public enum RotationModuleQuality
 
 public enum RotationModuleOrder
 {
-    [PropertyDisplay("[1] High-level strategy module. Responsible for targeting and enemy prioritization.")]
+    [PropertyDisplay("[1] 高层策略模块：负责目标选择和敌人优先级。")]
     HighLevel = 1,
 
-    [PropertyDisplay("[2] Standard rotation/utility module. Responsible for deciding which actions to use and setting up goal zones.")]
+    [PropertyDisplay("[2] 标准循环/实用模块：负责决定使用哪些技能并设置目标区域。")]
     Actions = 2,
 
-    [PropertyDisplay("[3] Movement module. Responsible for pathfinding and executing movement.")]
+    [PropertyDisplay("[3] 移动模块：负责寻路和执行移动。")]
     Movement = 3,
 }
 

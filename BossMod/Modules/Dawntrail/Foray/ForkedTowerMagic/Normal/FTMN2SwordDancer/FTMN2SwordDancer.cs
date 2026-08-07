@@ -1,200 +1,146 @@
-﻿namespace BossMod.Dawntrail.Foray.ForkedTowerMagic.Normal.FTMN2SwordDancer;
+using BossMod.Dawntrail.Foray.CriticalEngagement;
 
-sealed class SwordStormCast(BossModule module) : Components.RaidwideCast(module, (uint)AID.SwordStormCast);
-sealed class RushShort1(BossModule module) : Components.ChargeAOEs(module, (uint)AID.Rush1, 3.5f);
-sealed class RushShort2(BossModule module) : Components.ChargeAOEs(module, (uint)AID.Rush2, 3.5f);
-//sealed class RushSurgesword(BossModule module) : Components.SimpleAOEs(module, (uint)AID.RushSurgesword, new AOEShapeRect(60f, 3f));
-sealed class RushSurgesword(BossModule module) : Components.GenericAOEs(module)
+namespace BossMod.Dawntrail.Foray.ForkedTowerMagic.Normal.FTMN2SwordDancer;
+
+// Normal 魔之塔 Boss2: Sword Dancer. 秘法剑 96y 半圆、突进 30x6、旋转月环/钢铁、
+// 剑舞直条 60x20。剑刃矩形（ObjectEffect 2015283 四连）会在真实读条前预绘。
+sealed class SwordDancerAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 {
-    // hide AOE until knockback done, less clutter
-    private readonly Steelsbreath steelsbreath = module.FindComponent<Steelsbreath>()!;
-    private readonly List<AOEInstance> _aoes = [];
-    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
-    {
-        var knockbacks = steelsbreath.ActiveKnockbacks(slot, actor);
-        if (knockbacks.Length != 0)
-        {
-            return [];
-        }
-        return CollectionsMarshal.AsSpan(_aoes);
-    }
+    private static readonly AOEShapeCone MartialMystique = new(96f, 90f.Degrees());
+    private static readonly AOEShapeRect Rush = new(30f, 3f);
+    private static readonly AOEShapeDonut SpinDonut = new(5f, 60f);
+    private static readonly AOEShapeCircle SpinSmall = new(15f);
+    private static readonly AOEShapeCircle SpinLarge = new(20f);
+    private static readonly AOEShapeDonutSector TurnInnerWide = new(9f, 14f, 45f.Degrees());
+    private static readonly AOEShapeDonutSector TurnOuterWide = new(19f, 24f, 45f.Degrees());
+    private static readonly AOEShapeDonutSector TurnInnerNarrow = new(9f, 14f, 32.5f.Degrees());
+    private static readonly AOEShapeDonutSector TurnOuterNarrow = new(19f, 24f, 27f.Degrees());
+    private static readonly AOEShapeRect SwordDance = new(60f, 10f);
+    private static readonly AOEShapeCircle Pierce = new(5f);
 
-    public override void OnActorPlayActionTimelineEvent(Actor actor, ushort id)
+    protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
-        if (actor.OID == (uint)OID.DancingSwordSurgesword && id == 0x11D6)
-        {
-
-            _aoes.Add(new(new AOEShapeRect(60f, 3f), actor.Position, actor.Rotation, WorldState.FutureTime(8.2d)));
-        }
-    }
-
-    public override void OnCastFinished(Actor caster, ActorCastInfo spell)
-    {
-        if (spell.Action.ID == (uint)AID.RushSurgesword)
-        {
-            _aoes.Clear();
-        }
-    }
+        (uint)AID.MartialMystique2 => new(MartialMystique),
+        (uint)AID.Rush2 => new(Rush),
+        (uint)AID.Spin => new(SpinDonut),
+        (uint)AID.Spin1 => new(SpinSmall),
+        (uint)AID.Spin2 => new(SpinLarge),
+        (uint)AID.Turn1 => new(TurnInnerWide),
+        (uint)AID.Turn2 => new(TurnOuterWide),
+        (uint)AID.Turn5 => new(TurnInnerNarrow),
+        (uint)AID.Turnabout => new(TurnOuterNarrow),
+        (uint)AID.SwordDance6 => new(SwordDance),
+        (uint)AID.Pierce => new(Pierce),
+        _ => null
+    };
 }
-sealed class TurnInner(BossModule module) : Components.SimpleAOEGroups(module, [(uint)AID.TurnInner1, (uint)AID.TurnInner2, (uint)AID.TurnaboutInner], new AOEShapeDonutSector(9f, 14f, 45f.Degrees()));
-sealed class TurnOuter(BossModule module) : Components.SimpleAOEGroups(module, [(uint)AID.TurnOuter1, (uint)AID.TurnOuter2, (uint)AID.TurnaboutOuter], new AOEShapeDonutSector(19f, 24f, 45f.Degrees()));
-sealed class MartialMystique(BossModule module) : Components.SimpleAOEs(module, (uint)AID.MartialMystique, new AOEShapeRect(48f, 48f));
-sealed class Pierce(BossModule module) : Components.SimpleAOEs(module, (uint)AID.Pierce, 5f);
-sealed class Cyclosword(BossModule module) : Components.GenericAOEs(module)
+
+sealed class SwordRush(BossModule module) : Components.GenericAOEs(module)
 {
-    private readonly List<AOEInstance> _aoes = [];
-    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
+    private readonly List<AOEInstance> _aoes = [with(8)];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => CollectionsMarshal.AsSpan(_aoes);
+
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
-        return CollectionsMarshal.AsSpan(_aoes);
+        if (spell.Action.ID is not ((uint)AID.Rush or (uint)AID.Rush1) || spell.EventHappened)
+            return;
+        var direction = spell.LocXZ - caster.Position;
+        var shape = new AOEShapeRect(direction.Length(), 3.5f);
+        var rotation = Angle.FromDirection(direction);
+        _aoes.Add(new(shape, caster.Position, rotation, Module.CastFinishAt(spell), actorID: caster.InstanceID,
+            shapeDistance: shape.Distance(caster.Position, rotation)));
     }
 
-    public override void OnActorModelStateChange(Actor actor, byte modelState, byte animState1, byte animState2)
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
     {
-        if (actor.OID == (uint)OID.DancingSwordCyclosword && animState1 == 1 && animState2 == 0)
-        {
-            AOEShape? shape = modelState switch
-            {
-                4 => new AOEShapeDonut(15f, 60f),
-                7 => new AOEShapeCircle(15f),
-                31 => new AOEShapeCircle(20f),
-                _ => null
-            };
-
-            if (shape == null)
-            {
-                return;
-            }
-
-            _aoes.Add(new(shape, actor.Position, activation: WorldState.FutureTime(13.3d)));
-        }
+        if (spell.Action.ID is (uint)AID.Rush or (uint)AID.Rush1)
+            _aoes.RemoveAll(a => a.ActorID == caster.InstanceID);
     }
 
-    public override void OnCastFinished(Actor caster, ActorCastInfo spell)
-    {
-        if (_aoes.Count != 0)
-        {
-            switch (spell.Action.ID)
-            {
-                case (uint)AID.Spin:
-                case (uint)AID.Spin1:
-                case (uint)AID.Spin2:
-                    _aoes.RemoveAt(0);
-                    break;
-            }
-        }
-    }
+    public override void Update() => _aoes.RemoveAll(a => WorldState.CurrentTime > a.Activation.AddSeconds(1d));
 }
-sealed class SwordDance(BossModule module) : Components.GenericAOEs(module)
+
+// 普通剑舞: 0x1EC033 事件物件发 EAnim(1,2)，按顺序刷出四条 60x20 剑刃矩形。
+sealed class SwordBladeRects(BossModule module) : Components.GenericAOEs(module)
 {
-    private readonly List<AOEInstance> _aoes = [];
-    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
-    {
-        var count = _aoes.Count;
-        if (count == 0)
-            return [];
+    private static readonly AOEShapeRect Shape = new(0.5f, 10f, 60f);
+    private readonly List<(ulong ActorID, WPos Position, Angle Rotation)> _warnings = [with(4)];
+    private readonly List<AOEInstance> _displayed = [with(8)];
+    private DateTime _firstWarningAt;
 
-        var max = count > 2 ? 2 : count;
-        var aoes = CollectionsMarshal.AsSpan(_aoes);
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => CollectionsMarshal.AsSpan(_displayed);
 
-        ref var aoe = ref aoes[0];
-        aoe.Color = Colors.Danger;
-
-        return aoes[..max];
-    }
     public override void OnActorEAnim(Actor actor, uint state)
     {
-        if (actor.OID == (uint)OID.SwordDanceMarker && state == 0x00010002)
+        if (state != 0x00010002 || actor.OID != (uint)OID.Actor1ec033)
+            return;
+
+        if (_warnings.Any(w => w.ActorID == actor.InstanceID))
+            return;
+
+        if (_warnings.Count == 0)
+            _firstWarningAt = WorldState.CurrentTime;
+        _warnings.Add((actor.InstanceID, actor.Position, actor.Rotation));
+        if (_warnings.Count < 4)
+            return;
+
+        // ARR: the four warnings arrive within 2.5s, then resolve in warning order at
+        // +6.4s from the final warning and every 2.5s thereafter.
+        for (var i = 0; i < 4; ++i)
         {
-            // 8.8s between 1st mark and 1st cast
-            // 1s between eanims, 2.4s-ish between actual cast
-            var count = _aoes.Count;
-            var act = WorldState.FutureTime(8.8d + 2.4d * count);
-            _aoes.Add(new(new AOEShapeRect(30f, 10f, 30f), actor.Position, actor.Rotation, act));
+            var warning = _warnings[i];
+            _displayed.Add(new(Shape, warning.Position, warning.Rotation,
+                activation: WorldState.FutureTime(6.4d + 2.5d * i), actorID: warning.ActorID));
         }
+        _warnings.Clear();
+        _firstWarningAt = default;
     }
-    public override void OnCastFinished(Actor caster, ActorCastInfo spell)
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
     {
-        if (_aoes.Count != 0 && spell.Action.ID == (uint)AID.SwordDance)
+        if (spell.Action.ID != (uint)AID.SwordDance6 || _displayed.Count == 0)
+            return;
+
+        var now = WorldState.CurrentTime;
+        var resolved = _displayed.FindIndex(aoe => aoe.Activation <= now.AddSeconds(0.75d));
+        if (resolved >= 0)
+            _displayed.RemoveAt(resolved);
+    }
+
+    public override void Update()
+    {
+        var now = WorldState.CurrentTime;
+        if (_warnings.Count > 0 && now > _firstWarningAt.AddSeconds(5d))
         {
-            _aoes.RemoveAt(0);
+            _warnings.Clear();
+            _firstWarningAt = default;
         }
+        _displayed.RemoveAll(aoe => now > aoe.Activation.AddSeconds(1d));
     }
 }
 
-sealed class Steelsbreath(BossModule module) : Components.GenericKnockback(module)
+
+// 场地电网: 圆形场地边缘的电网，红色圆环标出（用户实测直径 ~47.4m）。
+sealed class ElectricBoundary(BossModule module) : Components.GenericAOEs(module)
 {
-    // do we need to avoid getting knocked back into RushSurgesword?
-    // only show 1 knockback; showing all 4 is visually confusing
-    private readonly List<Knockback> _knockbacks = [];
-    public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor)
-    {
-        var count = _knockbacks.Count;
-        if (count == 0)
-            return [];
-
-        var kbs = CollectionsMarshal.AsSpan(_knockbacks);
-        return kbs[..1];
-    }
-
-    public override void OnStatusGain(Actor actor, ref ActorStatus status)
-    {
-        if (status.ID == (uint)SID.LeapingLift && status.Extra == 0x47B)
-        {
-            // 10.7s between 1st status and resolve, status 1.4s between each, resolve 2.5s between each
-            var count = _knockbacks.Count;
-            var act = WorldState.FutureTime(10.7d + 2.5d * count);
-            _knockbacks.Add(new(actor.Position, 24f, act));
-        }
-    }
-
-    public override void OnCastFinished(Actor caster, ActorCastInfo spell)
-    {
-        if (_knockbacks.Count != 0 && spell.Action.ID == (uint)AID.Steelsbreath)
-        {
-            _knockbacks.RemoveAt(0);
-        }
-    }
-
-    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
-    {
-        var kbs = CollectionsMarshal.AsSpan(_knockbacks);
-        var count = kbs.Length;
-        if (count != 0)
-        {
-            ref var kb = ref kbs[0];
-            var act = kb.Activation;
-            if (!IsImmune(slot, act))
-            {
-                if (count == 1)
-                {
-                    hints.AddForbiddenZone(new SDKnockbackInCircleAwayFromOrigin(Arena.Center, kb.Origin, 25f, 24f), act);
-                }
-                else
-                {
-                    ref var kb1 = ref kbs[1];
-                    hints.AddForbiddenZone(new SDKnockbackInCircleAwayFromOriginIntoCircle(Arena.Center, kb.Origin, 25f, 24f, kb1.Origin, 7f), act);
-                }
-            }
-        }
-    }
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => [];
+    public override void DrawArenaForeground(int pcSlot, Actor pc)
+        => Arena.ZoneCircleOutlineUnclipped(Arena.Center, 23.7f, Colors.Danger, 3f);
 }
-
-[ModuleInfo(BossModuleInfo.Maturity.WIP,
-    StatesType = typeof(SwordDancerStates),
-    ConfigType = null, // replace null with typeof(SwordDancerConfig) if applicable
-    ObjectIDType = typeof(OID),
-    ActionIDType = typeof(AID),
-    StatusIDType = typeof(SID),
-    TetherIDType = typeof(TetherID),
-    IconIDType = null, // replace null with typeof(IconID) if applicable
+[ModuleInfo(BossModuleInfo.Maturity.Contributed,
+    Contributors = "KanoNoUta",
     PrimaryActorOID = (uint)OID.SwordDancer,
-    Contributors = "gynorhino",
-    Expansion = BossModuleInfo.Expansion.Dawntrail,
+    GroupType = BossModuleInfo.GroupType.TheForkedTowerMagic,
+    GroupID = 1017u,
+    NameID = 0u,
+    SortOrder = 2,
     Category = BossModuleInfo.Category.Foray,
-    GroupType = BossModuleInfo.GroupType.CFC,
-    GroupID = 1093u,
-    NameID = 14820u,
-    SortOrder = 1,
-    PlanLevel = 0)]
-[SkipLocalsInit]
-public sealed class SwordDancer(WorldState ws, Actor primary) : BossModule(ws, primary, new(600f, 704f), new ArenaBoundsCircle(24f));
+    Expansion = BossModuleInfo.Expansion.Dawntrail)]
+public sealed class SwordDancer : BossModule
+{
+    public SwordDancer(WorldState ws, Actor primary) : base(ws, primary, new(600f, 704f), new ArenaBoundsCircle(23.7f))
+        => Service.Logger.Information($"[FT] {GetType().Name} created (oid={primary.OID:X})");
+
+    protected override void DrawEnemies(int pcSlot, Actor pc) => Arena.Actor(PrimaryActor, allowDeadAndUntargetable: true);
+}

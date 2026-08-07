@@ -5,6 +5,7 @@ sealed class NecrophobiaStates : StateMachineBuilder
 {
     public NecrophobiaStates(BossModule module) : base(module)
     {
-        TrivialPhase();
+        TrivialPhase()
+            .ActivateOnEnter<NecrophobiaAOEs>();
     }
 }

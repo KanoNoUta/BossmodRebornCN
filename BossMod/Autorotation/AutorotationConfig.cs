@@ -27,7 +27,7 @@ public sealed class AutorotationConfig : ConfigNode
     [PropertyDisplay("显示身位提示", tooltip: "显示身位技能提示，指示移动到目标侧面或背面")]
     public bool ShowPositionals = false;
 
-    [PropertyDisplay("Follow RotationSolverReborn's desired positional", tooltip: "When enabled, the 'Misc AI: Goes to specified positional' rotation module will override its Positional track setting and instead use the positional currently requested by RotationSolverReborn over IPC (Does not apply to Target Dummies)")]
+    [PropertyDisplay("跟随 RotationSolverReborn 请求的身位", tooltip: "启用后，“杂项 AI：移动到指定身位”模块会忽略自身的身位设置，改为通过 IPC 使用 RotationSolverReborn 当前请求的身位（木人不适用）。")]
     public bool FollowRSRDesiredPositional = true;
 
     [PropertyDisplay("死亡时自动关闭自动循环")]
@@ -46,6 +46,6 @@ public sealed class AutorotationConfig : ConfigNode
     [PropertySlider(0, 30, Speed = 1)]
     public float EarlyPullThreshold = 1.5f;
 
-    [PropertyDisplay("Disable autorotation if the boss is pulled without a countdown", tooltip: "Only applies if you have a cooldown plan active.")]
+    [PropertyDisplay("无倒计时开怪时关闭自动循环", tooltip: "仅在启用技能规划时生效。")]
     public bool PlannedPullSafety = true;
 }
