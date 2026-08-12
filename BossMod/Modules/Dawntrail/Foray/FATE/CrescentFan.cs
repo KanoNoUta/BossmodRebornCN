@@ -15,14 +15,12 @@ public enum AID : uint {
 }
 
 sealed class HighPressureTornado(BossModule module) : Components.SimpleAOEGroups(module, [(uint)AID.HighPressureTornado, (uint)AID.HighPressureTornadoBig], new AOEShapeRect(15.0f, 2.0f));
-sealed class Tempest(BossModule module) : Components.RaidwideCast(module, (uint)AID.Tempest);
 
 [SkipLocalsInit]
 sealed class CrescentFanStates : StateMachineBuilder {
     public CrescentFanStates(BossModule module) : base(module) {
         TrivialPhase()
-            .ActivateOnEnter<HighPressureTornado>()
-            .ActivateOnEnter<Tempest>();
+            .ActivateOnEnter<HighPressureTornado>();
     }
 }
 
