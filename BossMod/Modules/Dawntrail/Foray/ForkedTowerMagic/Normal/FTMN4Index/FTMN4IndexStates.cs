@@ -10,6 +10,7 @@ sealed class IndexStates : StateMachineBuilder
             .ActivateOnEnter<IndexAOEs>()
             .ActivateOnEnter<ElementaryChemistryPlatforms>()
             .ActivateOnEnter<ElementalSectors>()
+            .ActivateOnEnter<FlyingDecreeGuide>()
             .ActivateOnEnter<PropulsiveShockwave>()
             .ActivateOnEnter<AllConsumingFlames>();
     }

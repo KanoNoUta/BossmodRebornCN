@@ -9,12 +9,14 @@ public enum OID : uint
     Anchor = 0x4D91, // non-targetable Pallmagia controller
     Helper = 0x233C,
     RouletteInnerGuide = 0x1EC02B, // event object; EAnim selects the two opposite inner sectors
-    RouletteOuterGuide = 0x1EC02C // event object; EAnim selects the two opposite outer sectors
+    RouletteOuterGuide = 0x1EC02C, // event object; EAnim selects the two opposite outer sectors
+    ChainGuide = 0x1EC02A // event object (keeper InstanceID - 4); EAnim stamps each keeper's instruction shape
 }
 
 public enum TetherID : uint
 {
-    EsotericOrder = 0xE // Pallkeeper -> boss, emitted in execution order during C26D/C26E
+    EsotericOrder = 0xE, // Pallkeeper -> boss, emitted in execution order during C26D/C26E
+    ChainSwap = 0xCF // Pallkeeper pair position swap during C26F polarity field (Reverse only)
 }
 
 public enum AID : uint
@@ -357,7 +359,7 @@ sealed class DeathRouletteGrid(BossModule module) : Components.GenericAOEs(modul
     private static readonly AOEShapeDonutSector InnerCell = new(4.5f, 12.5f, 60f.Degrees());
     // 第三圈 (外圈) 8 格 (每格 45°): 两个对侧安全区各 45° (合计 2 格), 危险覆盖其余 6 格 (270°).
     // 两个对侧危险扇区各 135° 宽 (半角 67.5°), 中间留两个 45° 缺口.
-    private static readonly AOEShapeDonutSector OuterCell = new(11.5f, 20.5f, 67.5f.Degrees());
+    private static readonly AOEShapeDonutSector OuterCell = new(11.5f, 20.5f, 69.5f.Degrees());
     private readonly List<AOEInstance> _displayed = [];
     private readonly HashSet<uint> _seenSequences = [];
     private readonly Dictionary<ulong, Angle> _orientationBaseline = [];
@@ -549,12 +551,131 @@ sealed class DeathRouletteGrid(BossModule module) : Components.GenericAOEs(modul
 // The three C512 helper casts each hit the raid; the boss cast is the stable warning packet.
 sealed class GreatWhirlwind(BossModule module) : Components.RaidwideCast(module, (uint)AID.GreatWhirlwind);
 
+sealed class ChainSchedule(BossModule module) : BossComponent(module)
+{
+    public enum Kind : byte { None, Circle, Cone }
+    private sealed record Keeper(ulong InstanceID, WPos Pos, Kind Kind = Kind.None);
+    private readonly Dictionary<ulong, Keeper> _keepers = [];
+    private readonly List<ulong> _order = [];
+
+    public bool Reverse { get; private set; }
+    public bool SwapDone { get; private set; }
+    public bool Ready => !Reverse ? _keepers.Values.Any(k => k.Kind != Kind.None) : SwapDone;
+
+    public (AID Kind, WPos Pos)? Entry(int index)
+    {
+        if (index < 0 || index >= _order.Count || !_keepers.TryGetValue(_order[index], out var keeper) || keeper.Kind == Kind.None)
+            return null;
+        return (keeper.Kind == Kind.Circle ? AID.PlaincrackerInstruction : AID.BadBreathInstruction, keeper.Pos);
+    }
+
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
+    {
+        if (spell.Action.ID is (uint)AID.EsotericInstruction or (uint)AID.EsotericInstructionReverse)
+        {
+            _keepers.Clear();
+            _order.Clear();
+            SwapDone = false;
+            Reverse = spell.Action.ID == (uint)AID.EsotericInstructionReverse;
+        }
+    }
+
+    public override void OnTethered(Actor source, in ActorTetherInfo tether)
+    {
+        if (source.OID != (uint)OID.Pallkeeper)
+            return;
+        if (tether.ID == (uint)TetherID.EsotericOrder)
+        {
+            if (!_keepers.ContainsKey(source.InstanceID))
+                _order.Add(source.InstanceID);
+            _keepers[source.InstanceID] = _keepers.TryGetValue(source.InstanceID, out var keeper) ? keeper with { Pos = source.Position } : new(source.InstanceID, source.Position);
+        }
+        else if (tether.ID == (uint)TetherID.ChainSwap)
+        {
+            var target = WorldState.Actors.Find(tether.Target);
+            if (target != null && _keepers.TryGetValue(source.InstanceID, out var sourceKeeper) && _keepers.TryGetValue(target.InstanceID, out var targetKeeper))
+            {
+                _keepers[source.InstanceID] = sourceKeeper with { Pos = targetKeeper.Pos };
+                _keepers[target.InstanceID] = targetKeeper with { Pos = sourceKeeper.Pos };
+            }
+            SwapDone = true;
+        }
+    }
+
+    public override void OnActorEAnim(Actor actor, uint state)
+    {
+        if (actor.OID != (uint)OID.ChainGuide)
+            return;
+        var kind = (state & 0xFFFF) switch { 0x20 or 0x40 => Kind.Circle, 0x02 or 0x08 => Kind.Cone, _ => Kind.None };
+        var keeperID = actor.InstanceID + 4;
+        if (kind != Kind.None && _keepers.TryGetValue(keeperID, out var keeper))
+            _keepers[keeperID] = keeper with { Kind = kind };
+    }
+}
+
+sealed class ChainSafeGuide(BossModule module) : BossComponent(module)
+{
+    private const float GuideRadius = 1f;
+    private const float SpotDist = 18f;
+    private int _resolved;
+    private readonly HashSet<uint> _seenSequences = [];
+    private ChainSchedule? Schedule => Module.FindComponent<ChainSchedule>();
+
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
+    {
+        if (spell.Action.ID is (uint)AID.EsotericInstruction or (uint)AID.EsotericInstructionReverse)
+        {
+            _resolved = 0;
+            _seenSequences.Clear();
+        }
+    }
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
+    {
+        if (spell.Action.ID is (uint)AID.BadBreathInstruction or (uint)AID.PlaincrackerInstruction && (spell.GlobalSequence == 0 || _seenSequences.Add(spell.GlobalSequence)))
+            ++_resolved;
+    }
+
+    private WPos? SafeSpot()
+    {
+        if (_resolved >= 3 || Schedule?.Entry(_resolved) is not { } entry || !Schedule.Ready)
+            return null;
+        var direction = Angle.FromDirection(entry.Pos - Arena.Center);
+        var candidates = entry.Kind == AID.PlaincrackerInstruction
+            ? new[] { Arena.Center + SpotDist * (direction + 115f.Degrees()).ToDirection(), Arena.Center + SpotDist * (direction - 115f.Degrees()).ToDirection() }
+            : new[] { Arena.Center + SpotDist * (direction + 45f.Degrees()).ToDirection(), Arena.Center + SpotDist * (direction - 45f.Degrees()).ToDirection() };
+        return candidates.FirstOrDefault(candidate => !InDanger(candidate, entry));
+    }
+
+    private bool InDanger(WPos point, (AID Kind, WPos Pos) entry)
+    {
+        if (entry.Kind == AID.PlaincrackerInstruction)
+            return (point - entry.Pos).Length() <= 31f;
+        var delta = (Angle.FromDirection(point - entry.Pos) - Angle.FromDirection(Arena.Center - entry.Pos)).Normalized();
+        return Math.Abs(delta.Rad) <= 50f.Degrees().Rad;
+    }
+
+    public override void DrawArenaForeground(int pcSlot, Actor pc)
+    {
+        if (SafeSpot() is { } spot)
+            Arena.ZoneCircleOutline(spot, GuideRadius, Colors.Safe);
+    }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        if (SafeSpot() is { } spot)
+            hints.GoalZones.Add(AIHints.GoalSingleTarget(spot, GuideRadius, 30f));
+    }
+}
+
 sealed class AppallingBehaviorStates : StateMachineBuilder
 {
     public AppallingBehaviorStates(BossModule module) : base(module)
     {
         TrivialPhase()
             .ActivateOnEnter<ElectricBoundary>()
+            .ActivateOnEnter<ChainSchedule>()
+            .ActivateOnEnter<ChainSafeGuide>()
             .ActivateOnEnter<AppallingAOEs>()
             .ActivateOnEnter<DeathRouletteGrid>()
             .ActivateOnEnter<GreatWhirlwind>();

@@ -38,7 +38,14 @@ public enum AID : uint
 
 sealed class FamiliarRaidwides(BossModule module) : Components.RaidwideCasts(module, [(uint)AID.HyperconductivePlasma, (uint)AID.AncientStorm]);
 sealed class BatteringArms(BossModule module) : Components.SingleTargetDelayableCast(module, (uint)AID.BatteringArms);
-sealed class SpinningSweep(BossModule module) : Components.SimpleAOEs(module, (uint)AID.SpinningSweep, new AOEShapeCone(40f, 60f.Degrees()));
+sealed class SpinningSweep(BossModule module) : Components.SimpleAOEs(module, (uint)AID.SpinningSweep, new AOEShapeCone(40f, 60f.Degrees()))
+{
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        foreach (var aoe in ActiveAOEs(slot, actor))
+            hints.AddForbiddenZone(aoe.Shape, aoe.Origin, aoe.Rotation, WorldState.CurrentTime);
+    }
+}
 
 // The blades remain dangerous while travelling. Their no-cast action effects (47531/47539)
 // only report contact after it happened, so the live actor positions are the useful warning.
@@ -69,7 +76,10 @@ sealed class UnbowedSpirit(BossModule module) : Components.GenericAOEs(module)
         {
             hints.AddForbiddenZone(AIShape, blade.Position);
             if (blade.LastFrameMovement.LengthSq() > 0.0001f)
-                hints.AddForbiddenZone(new SDCapsule(blade.Position, blade.LastFrameMovement.Normalized(), PredictionLength, 5.5f));
+            {
+                var length = PredictionLength;
+                hints.AddForbiddenZone(new SDCapsule(blade.Position, blade.LastFrameMovement.Normalized(), length, 4.5f));
+            }
         }
 
         if (live.Length != 0)

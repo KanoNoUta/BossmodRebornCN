@@ -178,6 +178,67 @@ sealed class ElementalSectors(BossModule module) : Components.GenericAOEs(module
     };
 }
 
+// A position is usable for the flying decree knockback when at least one phantom can knock the
+// player into the active arena. The arena is an irregular union of platforms with a central hole,
+// so a circular guide alone can select landing points that fall off the map.
+sealed class KnockbackDeathZone(WPos[] origins, float radius, float distance, Func<WPos, bool> inBounds) : ShapeDistance
+{
+    public override bool Contains(in WPos p)
+    {
+        foreach (var origin in origins)
+        {
+            var direction = p - origin;
+            var lengthSq = direction.LengthSq();
+            if (lengthSq <= radius * radius && (lengthSq <= 1e-4f || inBounds(p + distance * direction.Normalized())))
+                return false;
+        }
+        return true;
+    }
+
+    public override float Distance(in WPos p) => Contains(p) ? 0f : 1f;
+}
+
+sealed class FlyingDecreeGuide(BossModule module) : BossComponent(module)
+{
+    private const float KnockbackDistance = 9f;
+    private const float GuideRadius = 10f;
+    private static readonly WPos[] PhantomPositions =
+    [
+        new(0f, -612.5f),
+        new(-13.423f, -635.75f),
+        new(13.423f, -635.75f),
+    ];
+    private bool _active;
+    private DateTime _expire;
+
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
+    {
+        if (spell.Action.ID == (uint)AID.PropulsiveProphecy)
+        {
+            _active = true;
+            _expire = WorldState.FutureTime(15d);
+        }
+    }
+
+    public override void OnCastFinished(Actor caster, ActorCastInfo spell)
+    {
+        if (!spell.EventHappened && spell.Action.ID is (uint)AID.Shockwave1 or (uint)AID.Shockwave)
+            _active = false;
+    }
+
+    public override void Update()
+    {
+        if (_active && WorldState.CurrentTime >= _expire)
+            _active = false;
+    }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        if (_active)
+            hints.AddForbiddenZone(new KnockbackDeathZone(PhantomPositions, GuideRadius, KnockbackDistance, Module.Arena.InBounds), WorldState.FutureTime(11d));
+    }
+}
+
 // ARR has two helper casts per lance; deduplicate them by location so AI receives three real sources.
 sealed class PropulsiveShockwave(BossModule module) : Components.GenericKnockback(module)
 {
