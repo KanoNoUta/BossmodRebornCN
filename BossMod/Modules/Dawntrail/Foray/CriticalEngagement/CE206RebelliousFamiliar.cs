@@ -360,7 +360,7 @@ sealed class SDAsideKnockbackInAABBSquare(WPos center, WPos origin, WDir facing,
     public override bool RowIntersectsShape(WPos rowStart, WDir dx, float width, float cushion = default) => true;
 }
 
-sealed class SDAsideThenCenterPullInAABBSquare(WPos center, WPos asideOrigin, WDir asideFacing, float asideDistance, float pullDistance, float halfWidth) : ShapeDistance
+sealed class SDAsideThenAwayFromOriginInAABBSquare(WPos center, WPos asideOrigin, WDir asideFacing, float asideDistance, WPos circleOrigin, float circleDistance, float halfWidth) : ShapeDistance
 {
     public override bool Contains(in WPos p)
     {
@@ -368,11 +368,11 @@ sealed class SDAsideThenCenterPullInAABBSquare(WPos center, WPos asideOrigin, WD
         if (!p1.InSquare(center, halfWidth))
             return true;
 
-        // The second hit pulls the player back toward the arena center (ARR player displacement:
-        // C163 lands ~15y aside, C162 then carries the survivor ~20y back toward center, e.g.
-        // x_enc -25502 -> -24911 on both recorded rounds).
-        var toward = center - p1;
-        var p2 = toward == default ? p1 : p1 + pullDistance * toward.Normalized();
+        // The second hit pushes the player 30y away from the BCA0 caster (the second warning's
+        // helper position; live-verified: (234.7,362.7) -> ~(224,334), landing inside the 20y
+        // square with the 19.5 margin). A landing outside the square is lethal.
+        var away = p1 - circleOrigin;
+        var p2 = away == default ? p1 : p1 + circleDistance * away.Normalized();
         return !p2.InSquare(center, halfWidth);
     }
 
@@ -381,19 +381,15 @@ sealed class SDAsideThenCenterPullInAABBSquare(WPos center, WPos asideOrigin, WD
     public override bool RowIntersectsShape(WPos rowStart, WDir dx, float width, float cushion = default) => true;
 }
 
-// BCA0 resolves about six seconds after the telegraph as a 20y pull toward the arena center
-// (replay: after the 15y aside lands at x ~= 223.4, both recorded survivors move to x ~= 243.4).
-// The earlier AwayFromOrigin 30y interpretation was wrong - it pushed players into the fence.
+// BCA0 resolves about six seconds after the telegraph as a 30y knockback away from the BCA0
+// caster (the second warning's helper position, live-verified 30y: (234.7,362.7) -> ~(224,334)).
+// The landing must stay inside the 20y square (electric fence); the AI avoids starts whose
+// landing would exit it.
 sealed class CircularKnockback(BossModule module) : Components.GenericKnockback(module)
 {
     private static readonly AOEShapeCircle Shape = new(60f);
-    internal const float Distance = 20f;
-    private const float SafeHalfWidth = 19f;
-    // The second knockback's safe landing is hardcoded to where the first shove direction meets
-    // the electric fence (arena edge): push the small zone out to ~14y from center (radius 5
-    // covers 9..19, just inside the 19y boundary/电网).
-    internal const float SecondSafeOffset = 14f;
-    internal const float SecondSafeRadius = 5f;
+    internal const float Distance = 30f;
+    private const float SafeHalfWidth = 19.5f; // 20y square minus margin
     private const double HitDelay = 6.0d;
     private readonly List<Knockback> _casters = [];
     private readonly List<Knockback> _displayed = [with(4)];
@@ -409,26 +405,45 @@ sealed class CircularKnockback(BossModule module) : Components.GenericKnockback(
 
     public override void Update() => PruneExpired();
 
-    public override void DrawArenaBackground(int pcSlot, Actor pc)
+    public override void DrawArenaForeground(int pcSlot, Actor pc)
     {
-        // Second knockback: safe landing follows the second knockback's own direction (the spot the
-        // boss jumped to), not a fixed direction. Only show it when the second hit is imminent.
+        if (_casters.Count == 0)
+            return;
+        var kb = _casters[0];
         var aside = Module.FindComponent<KnockAside>();
-        if (aside?.SecondDir is not { } t)
+        if (aside?.AsideFor(kb) is { } asideData)
+        {
+            // First knockback not resolved yet: draw the 15y lateral shove arrow (away from the
+            // BCA1 helper axis, side chosen by the player's position) followed by the 30y push
+            // arrow away from the BCA0 caster, connected at the first arrow's end.
+            var asideDir = KnockbackGeometry.AsideDirection(pc.Position, asideData.AsidePos, asideData.Facing.ToDirection());
+            var p1 = pc.Position + KnockAside.Distance * asideDir;
+            DrawArrow(pc.Position, p1);
+            var away = p1 - kb.Origin;
+            var p2 = away == default ? p1 : p1 + kb.Distance * away.Normalized();
+            DrawArrow(p1, p2);
+        }
+        else
+        {
+            // First knockback already resolved (the aside sources are cleared by C163): seamlessly
+            // switch to the 30y second arrow drawn from the player's live position.
+            var away = pc.Position - kb.Origin;
+            var p2 = away == default ? pc.Position : pc.Position + kb.Distance * away.Normalized();
+            DrawArrow(pc.Position, p2);
+        }
+    }
+
+    private void DrawArrow(WPos from, WPos to)
+    {
+        var dir = to - from;
+        if (dir.LengthSq() < 1e-4f)
             return;
-        var imminent = false;
-        foreach (var kb in _casters)
-            if ((kb.Activation - WorldState.CurrentTime).TotalSeconds <= 3d)
-            {
-                imminent = true;
-                break;
-            }
-        if (!imminent)
-            return;
-        // 第二段安全区画成矩形框 (好看), 位置卡在第二段击退方向 (发出点) 的电网内侧, 尺寸按击退
-        // 距离/角度留出安全余量, 保证被第二段击退后落点不会撞进电网.
-        var center = Arena.Center + t * SecondSafeOffset;
-        Arena.AddRect(center, t.OrthoL(), 5f, 5f, 3f, Colors.Safe, 2f);
+        var nd = dir.Normalized();
+        Arena.AddLine(from, to, Colors.Safe, 2f);
+        const float headLen = 1.5f;
+        var base1 = to - nd * headLen + nd.OrthoR() * 0.8f;
+        var base2 = to - nd * headLen - nd.OrthoR() * 0.8f;
+        Arena.AddTriangleFilled(base1, to, base2, Colors.Safe);
     }
 
     public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
@@ -439,14 +454,7 @@ sealed class CircularKnockback(BossModule module) : Components.GenericKnockback(
             // Before C163, solve both hits from the candidate start: the first displacement can
             // differ by side even for two players in the same packet. After C163, only C162 remains.
             if (aside == null || !aside.AddCombinedAIHint(kb, hints))
-                hints.AddForbiddenZone(new SDKnockbackInAABBSquareTowardsOrigin(Arena.Center, kb.Origin, kb.Distance, SafeHalfWidth), kb.Activation);
-        }
-
-        // 第二段安全区引导：第二段 imminent 时引导 AI 到矩形框（第二段击退方向电网内侧）。
-        if (aside?.SecondDir is { } t && _casters.Any(kb => (kb.Activation - WorldState.CurrentTime).TotalSeconds <= 3d))
-        {
-            var center = Arena.Center + t * SecondSafeOffset;
-            hints.GoalZones.Add(position => position.InRect(center, t.OrthoL(), 5f, 5f, 3f) ? 50f : 0f);
+                hints.AddForbiddenZone(new SDKnockbackInAABBSquareAwayFromOrigin(Arena.Center, kb.Origin, kb.Distance, SafeHalfWidth), kb.Activation);
         }
     }
 
@@ -457,7 +465,9 @@ sealed class CircularKnockback(BossModule module) : Components.GenericKnockback(
         if ((spell.Action.ID & 0xFFFF) == (uint)AID.CircularKnockbackTelegraph)
         {
             _casters.RemoveAll(k => k.ActorID == caster.InstanceID);
-            _casters.Add(new(Arena.Center, Distance, Module.CastFinishAt(spell).AddSeconds(HitDelay), Shape, spell.Rotation, Kind.TowardsOrigin, actorID: caster.InstanceID));
+            // Origin = the BCA0 caster (helper) position: the 30y push is directed away from it
+            // (live-verified; the origin is available ~8.5s before the hit resolves).
+            _casters.Add(new(spell.LocXZ, Distance, Module.CastFinishAt(spell).AddSeconds(HitDelay), Shape, spell.Rotation, Kind.AwayFromOrigin, actorID: caster.InstanceID));
         }
     }
 
@@ -482,11 +492,8 @@ sealed class CircularKnockback(BossModule module) : Components.GenericKnockback(
 sealed class KnockAside(BossModule module) : Components.GenericKnockback(module)
 {
     private static readonly AOEShapeRect Shape = new(40f, 30f);
-    private const float Distance = 15f;
+    internal const float Distance = 15f; // exposed for the connected knockback arrows
     private const float SafeHalfWidth = 19f;
-    // 第一段击退安全起始半径: 距中心超过这个值的玩家被 15y 侧向击退后落点会出界进电网.
-    internal static readonly float SafeStartRadius = MathF.Sqrt(SafeHalfWidth * SafeHalfWidth - Distance * Distance);
-    private static readonly AOEShapeCone SafeHalfCircle = new(SafeStartRadius, 90f.Degrees());
     private const double HitDelay = 5.1d;
 
     private sealed class AsideSource(WPos asidePos, WPos circlePos, Angle facing, DateTime activation, ulong actorID)
@@ -503,30 +510,28 @@ sealed class KnockAside(BossModule module) : Components.GenericKnockback(module)
     private readonly List<AsideSource> _sources = [];
     private readonly List<(WPos AsidePos, Angle Facing, DateTime Activation, ulong ActorID)> _pendingAside = [];
     private readonly List<Knockback> _displayed = [with(4)];
-    private WDir? _lastAsideDir;
-    private DateTime _lastAsideSeen;
-    private WDir? _lastSecondDir;
-    private DateTime _lastSecondSeen;
-
-    // The lateral shove direction of the current aside. It survives the C163 resolution (sources
-    // are cleared) so the second-stage safe zone keeps being drawn on that half-field.
-    public WDir? CurrentAsideDir => WorldState.CurrentTime <= _lastAsideSeen.AddSeconds(15d) ? _lastAsideDir : null;
-
-    public bool HasActiveAside => _sources.Count != 0;
-
-    // 第二段击退发出点方向: boss 跳过去的位置 (BCA0 cast 位置), 第一段半场击退朝向它.
-    public WDir? SecondDir => WorldState.CurrentTime <= _lastSecondSeen.AddSeconds(15d) ? _lastSecondDir : null;
 
     public bool AddCombinedAIHint(Knockback circle, AIHints hints)
     {
         foreach (var source in _sources)
             if (source.Activation < circle.Activation && source.CirclePos.AlmostEqual(circle.Origin, 0.5f))
             {
-                hints.AddForbiddenZone(new SDAsideThenCenterPullInAABBSquare(Arena.Center, source.AsidePos,
-                    source.Facing.ToDirection(), Distance, CircularKnockback.Distance, SafeHalfWidth), source.Activation);
+                // Second landing must stay inside the 20y square (19.5 margin).
+                hints.AddForbiddenZone(new SDAsideThenAwayFromOriginInAABBSquare(Arena.Center, source.AsidePos,
+                    source.Facing.ToDirection(), Distance, circle.Origin, circle.Distance, 19.5f), source.Activation);
                 return true;
             }
         return false;
+    }
+
+    // The aside paired with the given second knockback (same BCA0 caster position), used to draw
+    // the connected knockback arrows.
+    public (WPos AsidePos, Angle Facing)? AsideFor(Knockback circle)
+    {
+        foreach (var source in _sources)
+            if (source.Activation < circle.Activation && source.CirclePos.AlmostEqual(circle.Origin, 0.5f))
+                return (source.AsidePos, source.Facing);
+        return null;
     }
 
     public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor)
@@ -538,34 +543,12 @@ sealed class KnockAside(BossModule module) : Components.GenericKnockback(module)
         return CollectionsMarshal.AsSpan(_displayed);
     }
 
-    public override void DrawArenaBackground(int pcSlot, Actor pc)
-    {
-        // First knockback (C163, 15y lateral). Safe zone is a half-circle on the shove side, radius
-        // sqrt(fence² - shove²)≈11.7y, so the 15y shove (and the second knockback) cannot land in
-        // the electric fence. The half-circle points at the second knockback's origin, and only
-        // shows during the first knockback (cleared after C163 resolves).
-        if (HasActiveAside && SecondDir is { } dir)
-        {
-            SafeHalfCircle.Outline(Arena, Arena.Center, Angle.FromDirection(dir), Colors.Safe, 2f);
-        }
-    }
-
     public override void Update() => PruneExpired();
 
     public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
     {
         foreach (var source in _sources)
             hints.AddForbiddenZone(new SDAsideKnockbackInAABBSquare(Arena.Center, source.AsidePos, source.Facing.ToDirection(), Distance, SafeHalfWidth), source.Activation);
-
-        // 第一段正确站位: 两段击退间隔极短 (~0.9s), AI 落地后没时间移动。引导到
-        // 安全半圆内 (固定 SecondDir 半场), 站半圆内任意点被 15y 侧击后落点都在 19y 电网内。
-        if (HasActiveAside && SecondDir is { } t)
-        {
-            // 目标区偏向安全半场深处 (SecondDir 方向 ~60% 半径处), 半径收窄, AI 停在半场内
-            // 且不贴着场地中线。
-            var goal = Arena.Center + t * (SafeStartRadius * 0.6f);
-            hints.GoalZones.Add(AIHints.GoalSingleTarget(goal, SafeStartRadius * 0.35f, 50f));
-        }
     }
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
@@ -584,11 +567,6 @@ sealed class KnockAside(BossModule module) : Components.GenericKnockback(module)
                     var p = _pendingAside[i];
                     _sources.RemoveAll(s => s.ActorID == p.ActorID);
                     _sources.Add(new(p.AsidePos, spell.LocXZ, p.Facing, p.Activation, p.ActorID));
-                    _lastAsideDir = p.Facing.ToDirection().OrthoR();
-                    _lastAsideSeen = WorldState.CurrentTime;
-                    var toSecond = spell.LocXZ - Arena.Center;
-                    _lastSecondDir = toSecond.LengthSq() > 1f ? toSecond.Normalized() : null;
-                    _lastSecondSeen = WorldState.CurrentTime;
                     _pendingAside.RemoveAt(i);
                 }
                 break;
@@ -650,20 +628,4 @@ sealed class RebelliousFamiliarStates : StateMachineBuilder
     NameID = 56u,
     SortOrder = 5)]
 // The arena is a 20y square: the floor is a 4x4 grid of 10y cells (North-Horn trigger XML R=20).
-public sealed class RebelliousFamiliar(WorldState ws, Actor primary) : BossModule(ws, primary, new(238f, 352f), new ArenaBoundsSquare(20f))
-{
-    // 双段击退期间 AI 必须待在安全区而不是追 boss: 第二段安全区硬编码在第一次击退方向贴近电网处.
-    // Without this, automation walks after the boss and gets shoved into the fence.
-    protected override void CalculateModuleAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
-    {
-        var aside = FindComponent<KnockAside>();
-        if (aside?.SecondDir is not { } t)
-            return;
-        // 第一段击退前: AI 必须站在安全起始半径内 (击退后落点才不会进电网), 而不是在 boss 目标圈
-        // 里打. 半圆/引导都朝向第二段击退发出点, 第一段结束后切到第二段安全区.
-        if (aside.HasActiveAside)
-            hints.GoalZones.Add(AIHints.GoalSingleTarget(Arena.Center + t * (KnockAside.SafeStartRadius * 0.5f), KnockAside.SafeStartRadius * 0.5f));
-        else
-            hints.GoalZones.Add(AIHints.GoalSingleTarget(Arena.Center + t * CircularKnockback.SecondSafeOffset, CircularKnockback.SecondSafeRadius));
-    }
-}
+public sealed class RebelliousFamiliar(WorldState ws, Actor primary) : BossModule(ws, primary, new(238f, 352f), new ArenaBoundsSquare(20f));
