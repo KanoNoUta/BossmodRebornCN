@@ -26,13 +26,14 @@ sealed class CrescentFanStates : StateMachineBuilder {
 
 [ModuleInfo(BossModuleInfo.Maturity.Contributed,
     StatesType = typeof(CrescentFanStates),
-    ConfigType = null, // replace null with typeof(CrescentFanConfig) if applicable
+    ConfigType = null,
     ObjectIDType = typeof(OID),
     ActionIDType = typeof(AID),
-    StatusIDType = null, // replace null with typeof(SID) if applicable
-    TetherIDType = null, // replace null with typeof(TetherID) if applicable
-    IconIDType = null, // replace null with typeof(IconID) if applicable
-    PrimaryActorOID = (uint)OID.CrescentFan,
+    StatusIDType = null,
+    TetherIDType = null,
+    IconIDType = null,
+    // 撒娇罐从不进入战斗；以新月风扇为主目标会在小怪清空时提前卸载模块。
+    PrimaryActorOID = (uint)OID.Pot,
     Contributors = "KanoNoUta",
     Expansion = BossModuleInfo.Expansion.Dawntrail,
     Category = BossModuleInfo.Category.Foray,
@@ -42,4 +43,37 @@ sealed class CrescentFanStates : StateMachineBuilder {
     SortOrder = 1,
     PlanLevel = 0)]
 [SkipLocalsInit]
-public sealed class CrescentFan(WorldState ws, Actor primary) : OpenWorldFate(ws, primary);
+public sealed class CrescentFan(WorldState ws, Actor primary) : OpenWorldFate(ws, primary)
+{
+    private bool _bigFanSeen;
+
+    // 2073 以非战斗中的撒娇罐作为主目标，不能使用 OpenWorldFate 默认的 InCombat 条件。
+    protected override bool CheckPull()
+    {
+        var fate = WorldState.Client.ActiveFate;
+        if (fate.ID != Info?.NameID || fate.Radius <= 0f)
+            return false;
+
+        var player = Raid.Player();
+        return player != null
+            && player.Position.InCircle(new WPos(fate.Center.XZ()), fate.Radius)
+            && WorldState.Actors.Any(a => a.OID == (uint)OID.Pot);
+    }
+
+    public override bool CheckReset()
+    {
+        var bigFanExists = WorldState.Actors.Any(a => a.OID == (uint)OID.BigFan);
+        _bigFanSeen |= bigFanExists;
+        if (_bigFanSeen && !bigFanExists)
+            return true;
+
+        var fate = WorldState.Client.ActiveFate;
+        if (fate.ID == Info?.NameID && fate.Radius > 0f)
+        {
+            var player = Raid.Player();
+            return player == null || !player.Position.InCircle(new WPos(fate.Center.XZ()), fate.Radius + 10f);
+        }
+
+        return base.CheckReset();
+    }
+}

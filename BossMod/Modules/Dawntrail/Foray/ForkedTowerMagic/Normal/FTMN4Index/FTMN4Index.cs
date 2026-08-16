@@ -396,4 +396,10 @@ public sealed class Index : BossModule
         => Service.Logger.Information($"[FT] {GetType().Name} created (oid={primary.OID:X})");
 
     protected override void DrawEnemies(int pcSlot, Actor pc) => Arena.Actor(PrimaryActor, allowDeadAndUntargetable: true);
+
+    protected override void UpdateModule()
+    {
+        if (PrimaryActor.IsDeadOrDestroyed && StateMachine.ActiveState != null)
+            StateMachine.Reset();
+    }
 }

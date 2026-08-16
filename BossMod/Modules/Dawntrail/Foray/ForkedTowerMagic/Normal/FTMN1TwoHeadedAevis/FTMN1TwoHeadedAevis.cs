@@ -264,6 +264,12 @@ public sealed class TwoHeadedAevis : BossModule
         || Enemies((uint)OID.GreenHead1).Any(h => h.IsTargetable && h.InCombat)
         || Enemies((uint)OID.BlueHead1).Any(h => h.IsTargetable && h.InCombat);
 
+    protected override void UpdateModule()
+    {
+        if (PrimaryActor.IsDeadOrDestroyed && StateMachine.ActiveState != null)
+            StateMachine.Reset();
+    }
+
     protected override void DrawEnemies(int pcSlot, Actor pc)
     {
         foreach (var head in Enemies((uint)OID.GreenHead1))

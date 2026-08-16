@@ -17,8 +17,8 @@ public enum AID : uint
     CentralWhipVisual = 0xB872, // boss->self, 4.7s cast, visual for CentralWhip
     SideWhipVisual = 0xB873, // boss->self, 4.7s cast, visual for SideWhip
     CentralWhip = 0xB874, // helper, 5.7s cast, 中央鞭打, through-body line (52y long, 10y wide)
-    SideWhip = 0xB875, // helper, 5.7s cast, 侧方鞭打, one 135-degree cone (26y)
-    SideWhip2 = 0xC241, // helper, 5.7s cast, 侧方鞭打, opposite 135-degree cone (26y)
+    SideWhip = 0xB875, // helper, 5.7s cast, 侧方鞭打（正侧，实测为 180° 半圆）
+    SideWhip2 = 0xC241, // helper, 5.7s cast, 侧方鞭打（反侧，实测为 180° 半圆）
 
     PollenScatter = 0xB876, // boss->self, 3.7s cast, 花粉飞散, visual precursor for Predation
     Predation = 0xB877, // boss, 6.7s cast, 捕食, 10y circle
@@ -60,10 +60,7 @@ sealed class ManyMouthsAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 {
     // 52y long / 10y wide line, centered on the caster (extends front and back).
     private static readonly AOEShapeRect CentralLine = new(26f, 5f, 26f);
-    // Side whip is a pair of opposing 135-degree cones; the safe gap is the narrow front/back sliver.
-    // Replay-verified: B875 hits span +18..+161 deg from facing (C241 the mirrored -138..-16),
-    // i.e. a 135-degree cone - the official sheet's fan180 Omen is not representative here.
-    private static readonly AOEShapeCone Whip = new(26f, 67.5f.Degrees());
+    // 侧方鞭打由 SideLashes 按两个 helper 分别绘制为左右 180° 半圆。
     // Poison mist fills 3 of the 4 quadrants with 90-degree cones (45-degree half-angle).
     private static readonly AOEShapeCone Mist = new(30f, 45f.Degrees());
     private static readonly AOEShapeCircle Predation = new(10f);
@@ -73,13 +70,83 @@ sealed class ManyMouthsAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
         (uint)AID.CentralWhip => new(CentralLine),
-        (uint)AID.SideWhip or (uint)AID.SideWhip2 => new(Whip),
         (uint)AID.PoisonMist or (uint)AID.PoisonMist2 or (uint)AID.PoisonMist3 or (uint)AID.PoisonMist4 => new(Mist),
         (uint)AID.Predation => new(Predation),
         (uint)AID.VenomBlob => new(Blob),
         (uint)AID.Venom => new(VenomCircle),
         _ => null
     };
+}
+
+// 侧方鞭打：两个 helper 分别对应左右两侧 180° 半圆，圆心从 helper 沿其面向的侧方外移 5y。
+// spell.Rotation 是 helper 指向落点的方向，不能再叠加偏移，否则两块危险区会画到同侧。
+sealed class SideLashes(BossModule module) : Components.GenericAOEs(module)
+{
+    private static readonly AOEShapeCone HalfCircle = new(30f, 90f.Degrees());
+
+    private static Angle FacingOffsetFor(uint actionID) => actionID switch
+    {
+        (uint)AID.SideWhip => -90f.Degrees(),
+        (uint)AID.SideWhip2 => 90f.Degrees(),
+        _ => default
+    };
+
+    private sealed class Lash(uint actionID, AOEInstance aoe)
+    {
+        public readonly uint ActionID = actionID;
+        public readonly AOEInstance AOE = aoe;
+    }
+
+    private readonly List<Lash> _lashes = new(8);
+    private readonly List<AOEInstance> _displayed = new(8);
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
+    {
+        PruneExpired();
+        _displayed.Clear();
+        foreach (var lash in _lashes)
+            _displayed.Add(lash.AOE);
+        return CollectionsMarshal.AsSpan(_displayed);
+    }
+
+    public override void Update() => PruneExpired();
+
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
+    {
+        var offset = FacingOffsetFor(spell.Action.ID);
+        if (offset == default || spell.EventHappened)
+            return;
+
+        var activation = Module.CastFinishAt(spell);
+        if (activation <= WorldState.CurrentTime)
+            return;
+
+        var direction = (caster.Rotation + offset).ToDirection();
+        var origin = caster.Position + direction * 5f;
+        var aoe = new AOEInstance(HalfCircle, origin, caster.Rotation + offset, activation,
+            risky: true, actorID: caster.InstanceID,
+            shapeDistance: HalfCircle.Distance(origin, caster.Rotation + offset));
+        var duplicate = _lashes.FindIndex(entry => entry.ActionID == spell.Action.ID && entry.AOE.ActorID == caster.InstanceID);
+        if (duplicate >= 0)
+            _lashes[duplicate] = new(spell.Action.ID, aoe);
+        else
+            _lashes.Add(new(spell.Action.ID, aoe));
+    }
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
+    {
+        if (spell.Action.ID is not ((uint)AID.SideWhip or (uint)AID.SideWhip2))
+            return;
+
+        _lashes.RemoveAll(entry => entry.ActionID == spell.Action.ID && entry.AOE.ActorID == caster.InstanceID);
+        ++NumCasts;
+    }
+
+    private void PruneExpired()
+    {
+        var now = WorldState.CurrentTime;
+        _lashes.RemoveAll(entry => now > entry.AOE.Activation.AddSeconds(2d));
+    }
 }
 
 // Persistent venom puddles (0x4BCD) are initially created at (0, 0), then moved to their real
@@ -191,6 +258,7 @@ sealed class ManyMouthsToFeedStates : StateMachineBuilder
         TrivialPhase()
             .ActivateOnEnter<VenomBoundary>()
             .ActivateOnEnter<ManyMouthsAOEs>()
+            .ActivateOnEnter<SideLashes>()
             .ActivateOnEnter<VenomPuddles>()
             .ActivateOnEnter<VenomSpread>()
             .ActivateOnEnter<PoisonRain>();
