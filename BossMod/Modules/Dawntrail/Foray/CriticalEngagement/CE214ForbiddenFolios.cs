@@ -1,5 +1,4 @@
 using BossMod.Dawntrail.Foray.CriticalEngagement;
-using System.Linq;
 
 namespace BossMod.Dawntrail.Foray.CriticalEngagement.CE214ForbiddenFolios;
 
@@ -27,15 +26,16 @@ public enum AID : uint
     HorizontalRule = 0xB8CA, // helper->location, range 50 width 12 rect
     SummonPages = 0xB8CB, // helper->location, page summon visual
 
-    KnowledgeLevel3FlareWide = 0xB8CD, // helper->self, range 25 180-degree cone（推测 = 知见3级即死 180° 宽版：helper 段 47308-47310 呈"5级宽/空位/4级宽"结构，质数宽在独立段 49879/50561，排除后空位指向 3级宽；page 段推测 47316 相印证。2026-08-16 推测记录，未接线——待回放实测确认后再挂 KnowledgeSectors.ConfigFor（Level3Wide → Sector180））
+    KnowledgeLevel3FlareWide = 0xB8CD, // helper->self, range 25 180-degree cone（已实测确认 2026-08-18：helper 233C 施放 47309 "知见3级核爆" 3级宽版，与 page 4BD5 的 47316 同步；已接 KnowledgeSectors.ConfigFor → Level3Wide/Sector180）
     KnowledgeLevel4HolyWide = 0xB8CE, // helper->self, range 25 180-degree cone
     KnowledgeLevel5Death = 0xB8CF, // helper->self, range 25 120-degree cone
+    KnowledgeLevel5DeathBook = 0xB8CC, // two-book round: the 5级 sector is cast with this page-side AID (47308) instead of B8CF
     KnowledgeLevel3Flare = 0xB8D0, // helper->self, range 25 120-degree cone
     KnowledgeLevel4Holy = 0xB8D1, // helper->self, range 25 120-degree cone
     PrimeKnowledgeLevelDeath = 0xB8D2, // helper->self, range 25 120-degree cone
     PageLevel5Visual = 0xB8D3, // page->self, visual（实测 180° 轮 page 读条，2026-08-16 回放；对应 helper 47308/50554）
-    PageLevel3Visual = 0xB8D4, // page->self, visual（推测 = 3级核爆 180° 宽版 visual：page 段 47315-47318 按 5/3/4/质数 序列与 120° 段 47311-47314 同序推断，待回放验证）
-    PageLevel4Visual = 0xB8D5, // page->self, visual（推测 = 4级核爆 180° 宽版 visual：同上序列推断，待回放验证）
+    PageLevel3Visual = 0xB8D4, // page->self, visual（已实测确认 2026-08-18：page 4BD5 施放 47316 "知见3级核爆" 3级宽版 visual，与 helper 233C 的 47309/50555 同步；已接 KnowledgeSectors.ConfigFor → Level3Wide/Sector180）
+    PageLevel4Visual = 0xB8D5, // page->self, visual（已实测确认 2026-08-18：page 4BD6 施放 47317 "知见4级神圣" 4级宽版 visual，与 helper 233C 的 47310/50556 同步；已接 KnowledgeSectors.ConfigFor → Level4Wide/Sector180）
     PagePrimeVisual = 0xB8D6, // page->self, visual（实测 180° 轮 page 读条，2026-08-16 回放；对应 helper 49879/50561）
     BookDropVisual = 0xB8D7, // boss->self, visual
     BookDrop = 0xB8DA, // book trap->self, 8.0s cast, range 3 circle
@@ -51,9 +51,10 @@ public enum AID : uint
     UnboundInk = 0xC154, // boss->self, 4.0s cast, range 9 circle
     PrimeKnowledgeLevelDeathWide = 0xC2D7, // helper->self, range 25 180-degree cone
 
-    KnowledgeLevel3FlareWideAlt = 0xC57B, // helper->self, duplicate of B8CD（推测 = 知见3级即死 180° 宽版，50555；2026-08-16 推测记录，未接线——待回放实测确认后再挂 KnowledgeSectors.ConfigFor）
+    KnowledgeLevel3FlareWideAlt = 0xC57B, // helper->self, duplicate of B8CD（已实测确认 2026-08-18：50555 即 3级宽版，与 47309 同源同步；已接 KnowledgeSectors.ConfigFor → Level3Wide/Sector180）
     KnowledgeLevel4HolyWideAlt = 0xC57C, // helper->self, duplicate of B8CE
     KnowledgeLevel5DeathAlt = 0xC57D, // helper->self, duplicate of B8CF
+    KnowledgeLevel5DeathBookAlt = 0xC57A, // two-book round: duplicate of B8CC (50554)
     KnowledgeLevel3FlareAlt = 0xC57E, // helper->self, duplicate of B8D0
     KnowledgeLevel4HolyAlt = 0xC57F, // helper->self, duplicate of B8D1
     PrimeKnowledgeLevelDeathAlt = 0xC580, // helper->self, duplicate of B8D2
@@ -75,6 +76,8 @@ sealed class BasicAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 {
     private static readonly AOEShapeCircle Blot = new(15f);
     private static readonly AOEShapeCircle SummonPages = new(4f);
+    // Initial cross writing: 10y-wide arms (5 half-width) per user testing - the wider 6.5
+    // trial value was confirmed too large, so the action-sheet width is kept.
     private static readonly AOEShapeCross QuadRule = new(25f, 5f);
     private static readonly AOEShapeCone FireII = new(60f, 22.5f.Degrees());
 
@@ -83,6 +86,90 @@ sealed class BasicAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
     // only pre-position, then the first row becomes available after it resolves. Replay cast-start
     // spacing reaches 2.026s, so a literal 2.0s cutoff incorrectly made the second row look safe.
     protected override double RiskyActivationWindow => 2.25d;
+
+    // 溅墨三行 AI 紧迫值方案（2026-08-06 回放验证）：三行 9 圆覆盖全场（r24 场地四角距最近圆
+    // 仅 3.3y），纯避让没有安全点。按"最后一组就位 → 第一组结算后进第一组"引导：
+    // - 第一组：正常紧迫（activation 不变）
+    // - 第二组：紧迫值恒 = now（G=0 硬禁飞，AI 永不进第二组）
+    // - 第三组：第一组结算前不加禁区（AI 视为安全区，自然前往就位）；第一组结算后恢复正常
+    //   （AI 被赶出第三组，唯一安全区 = 第一组结算后的区域）
+    // 只影响 AI 层（ForbiddenZone），ActiveAOEs 显示层一行未动。
+    private bool _sawFullSet;
+
+    protected override void AddAOEForbiddenZones(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        ActiveAOEs(slot, actor); // 刷新 Risky 标记
+
+        var blot = new List<PendingAOE>();
+        foreach (var p in Pending)
+        {
+            if (p.ActionID == (uint)AID.Blot)
+                blot.Add(p);
+            else if (p.AOE.Risky)
+                hints.AddForbiddenZone(p.AOE.ShapeDistance ?? p.AOE.Shape.Distance(p.AOE.Origin, p.AOE.Rotation), p.AOE.Activation);
+        }
+        if (blot.Count == 0)
+        {
+            _sawFullSet = false;
+            return;
+        }
+
+        // 同组 3 圆同时 cast（activation 一致），间隔 >1s 分界
+        blot.Sort((a, b) => a.AOE.Activation.CompareTo(b.AOE.Activation));
+        var groups = new List<List<PendingAOE>>();
+        foreach (var p in blot)
+        {
+            if (groups.Count == 0 || Math.Abs((p.AOE.Activation - groups[^1][0].AOE.Activation).TotalSeconds) > 1d)
+                groups.Add([p]);
+            else
+                groups[^1].Add(p);
+        }
+        if (groups.Count >= 3)
+            _sawFullSet = true;
+
+        var now = WorldState.CurrentTime;
+        // 第三组仅在完整三组且第一组未结算时隐藏；第一组结算后（组数回落或已过其 activation）恢复
+        var hideThird = groups.Count == 3 && now < groups[0][0].AOE.Activation;
+        for (var gi = 0; gi < groups.Count; ++gi)
+        {
+            var g = groups[gi];
+            var act = g[0].AOE.Activation;
+            if (act <= now)
+                continue; // 已结算组：跳过，避免已结算 AOE 变 G=0 禁飞阻塞安全区
+
+            bool second, third;
+            if (groups.Count == 3)
+            {
+                second = gi == 1;
+                third = gi == 2;
+            }
+            else if (groups.Count == 2 && _sawFullSet)
+            {
+                second = gi == 0; // 第一组已结算：剩余最早 = 第二组
+                third = gi == 1;
+            }
+            else if (groups.Count == 2)
+            {
+                second = gi == 1; // 第三组尚未 cast：[第一, 第二]
+                third = false;
+            }
+            else
+            {
+                second = third = false;
+            }
+
+            if (third && hideThird)
+                continue;
+
+            foreach (var p in g)
+            {
+                if (!p.AOE.Risky)
+                    continue;
+                var activation = second ? now : act;
+                hints.AddForbiddenZone(p.AOE.ShapeDistance ?? p.AOE.Shape.Distance(p.AOE.Origin, p.AOE.Rotation), activation);
+            }
+        }
+    }
 
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
@@ -173,59 +260,37 @@ sealed class CoverToCoverSequence(BossModule module) : Components.GenericAOEs(mo
 // Thunder II arrives in two batches, two seconds apart. Draw both batches for planning while only
 // making the earliest simultaneous set risky; otherwise automation sees the complete square as
 // forbidden and oscillates. Each helper's origin and rotation are the actual lane geometry.
-sealed class ThunderII(BossModule module) : Components.GenericAOEs(module)
+sealed class ThunderII(BossModule module) : ReplayValidatedCastAOEs(module)
 {
-    // 井字整体: helper 的 ThunderII cast 事件偶发缺失会导致部分条不画。
-    // 从存活 helper 实体实时画 (施法中)。helper 站在场地边缘的 50x50 方形边框上，
-    // 直条必须对称 50+50 (100y) 才能从任意一侧贯通全场，横竖交叉成完整井字网格；
-    // 60y (30+30) 只能覆盖到场地中部，会导致网格缺 1/4、条子看起来是分开的。
-    private static readonly AOEShapeRect Shape = new(50f, 2.5f, 50f);
-    private readonly List<AOEInstance> _displayed = [with(16)];
-
-    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
-    {
-        _displayed.Clear();
-        var now = WorldState.CurrentTime;
-        // 两批直条间隔 2s、互相交错 5y；若同时画，条形会铺满全场变成一整片颜色。
-        // 先找最早结算的那批，重叠期间只画它，等它消失后再显示下一批。
-        var earliest = default(DateTime);
-        foreach (var helper in Module.Enemies((uint)OID.Helper))
-        {
-            if (helper.IsDeadOrDestroyed || helper.CastInfo is not { } cast || (cast.Action.ID & 0xFFFF) != (uint)AID.ThunderII)
-                continue;
-            var activation = Module.CastFinishAt(cast);
-            if (earliest == default || activation < earliest)
-                earliest = activation;
-        }
-        if (earliest == default)
-            return CollectionsMarshal.AsSpan(_displayed);
-
-        foreach (var helper in Module.Enemies((uint)OID.Helper))
-        {
-            if (helper.IsDeadOrDestroyed || helper.CastInfo is not { } cast || (cast.Action.ID & 0xFFFF) != (uint)AID.ThunderII)
-                continue;
-            var activation = Module.CastFinishAt(cast);
-            if (activation > earliest.AddSeconds(0.5d))
-                continue;
-            var origin = helper.Position;
-            var imminent = activation <= now.AddSeconds(1d);
-            _displayed.Add(new(Shape, origin, cast.Rotation, activation,
-                imminent ? Colors.Danger : Colors.AOE, imminent, helper.InstanceID,
-                Shape.Distance(origin, cast.Rotation)));
-        }
-        return CollectionsMarshal.AsSpan(_displayed);
-    }
+    // Hit reconstruction puts every confirmed target within 2.74y of the lane center (including
+    // player hitbox) while non-targets begin at the same boundary. A 5y-wide lane leaves the
+    // intended 5y gaps between helpers spaced 10y apart; width 10 falsely tiles the whole arena.
+    private static readonly AOEShapeRect Shape = new(50f, 2.5f);
+    // Both batches resolve two seconds apart. Widening the risk window to cover both at once made
+    // the full lane frame leave no safe cell (regression: noSafeFrames), so the second batch must
+    // stay preview until the first resolves; the 0.25s tail is unavoidable without a per-batch
+    // deadline. The "three-through-one" weave the operator reported is the ink grid, not thunder.
+    protected override double RiskyActivationWindow => 0.25d;
+    protected override DateTime? CompetingActivation => Module.FindComponent<BasicAOEs>()?.EarliestActivation;
+    protected override AOEConfig? ConfigFor(uint actionID) => actionID == (uint)AID.ThunderII ? new(Shape) : null;
 }
 
+// Quad Rule emits four waves at roughly two-second intervals. Unlike ordinary self AOEs, B8CA's
+// facing points away from its location target in the recording, so derive the lane direction from
+// source -> LocXZ. The fixed 50-yalm length intentionally extends to the arena edge.
 sealed class HorizontalRule(BossModule module) : Components.GenericAOEs(module)
 {
-    // The reference trigger uses refY=50/offY=-50/radius=3: every rule is a 6y-wide line
-    // extending 50y in both directions from the boss center, so it always crosses the full arena.
+    // 6y-wide lanes (3 half-width): the grid requires the lanes to tile without overlap or gaps
+    // (batch step is 6y, so the lane width must be 6y too), and the replay hits peak at 2.94y
+    // off-axis (5y half-width is excluded by that sample). lengthBack=50 makes the lane span the
+    // whole arena both ways along its axis (vertical lanes north-south, horizontal east-west) -
+    // the default 0 left only the half toward the cast direction, showing short lanes.
     private static readonly AOEShapeRect Shape = new(50f, 3f, 50f);
     private const double EventResolveTolerance = 0.5d;
     private const double ExpireDelay = 2d;
     private readonly List<AOEInstance> _pending = [with(16)];
     private readonly List<AOEInstance> _displayed = [with(16)];
+    private readonly HashSet<uint> _seenGlobalSequences = [];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
     {
@@ -255,31 +320,44 @@ sealed class HorizontalRule(BossModule module) : Components.GenericAOEs(module)
 
         PruneExpired();
         var activation = Module.CastFinishAt(spell);
-        if (activation <= WorldState.CurrentTime)
+        var direction = spell.LocXZ - caster.Position;
+        if (activation <= WorldState.CurrentTime || direction.LengthSq() < 0.01f)
             return;
 
-        _pending.RemoveAll(aoe => aoe.ActorID == caster.InstanceID);
-        // The location field is occasionally omitted on one of the four concurrent helper
-        // packets. The cast rotation is always present and is the authoritative cardinal lane
-        // orientation; the shape is symmetric front/back, so its facing sign is immaterial.
-        var rotation = spell.Rotation;
-        var origin = caster.Position;
-        _pending.Add(new(Shape, origin, rotation, activation, actorID: caster.InstanceID, shapeDistance: Shape.Distance(origin, rotation)));
+        // This component only serves the cursive-writing lanes, so a new batch fully replaces the
+        // previous one. The four helpers of one batch cast at the same time (identical activation),
+        // so clear only when a new batch starts (~2s apart) - an unconditional clear would run once
+        // per helper callback and leave only the last lane of the batch (user-verified "1 lane").
+        // Per-InstanceID removal was unsafe too: the helpers reuse instance IDs across batches
+        // (batch 1/3 and batch 2/4 share the same IDs), leaving the old batch alongside the new one.
+        if (_pending.Count != 0 && Math.Abs((_pending[0].Activation - activation).TotalSeconds) > 0.5d)
+            _pending.Clear();
+        var rotation = Angle.FromDirection(direction);
+        // The float coordinates (LocXZ vs caster position) skew the direction by a fraction of a
+        // degree; snap to the nearest cardinal so vertical lanes run exactly north-south and
+        // horizontal lanes exactly east-west (no pixel-level tilt).
+        var snapped = MathF.Round(rotation.Rad / (MathF.PI / 2f)) * (MathF.PI / 2f);
+        rotation = new Angle(snapped);
+        _pending.Add(new(Shape, caster.Position, rotation, activation, actorID: caster.InstanceID, shapeDistance: Shape.Distance(caster.Position, rotation)));
         _pending.Sort((left, right) => left.Activation.CompareTo(right.Activation));
     }
 
     public override void OnCastFinished(Actor caster, ActorCastInfo spell)
     {
         if (spell.Action.ID == (uint)AID.HorizontalRule && (spell.EventHappened || Module.CastFinishAt(spell) <= WorldState.CurrentTime.AddSeconds(EventResolveTolerance)))
-            _pending.RemoveAll(aoe => aoe.ActorID == caster.InstanceID);
+            // Only the already-resolving entry may be removed: the four helpers reuse instance IDs
+            // across batches, so a late finish/effect event of the previous batch must not delete
+            // the freshly created next-batch entries (their activation is still in the future).
+            _pending.RemoveAll(aoe => aoe.ActorID == caster.InstanceID && aoe.Activation <= WorldState.CurrentTime.AddSeconds(EventResolveTolerance));
     }
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell)
     {
-        if (spell.Action.ID != (uint)AID.HorizontalRule)
+        if (spell.Action.ID != (uint)AID.HorizontalRule || spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence))
             return;
 
-        _pending.RemoveAll(aoe => aoe.ActorID == caster.InstanceID);
+        // Same instance-ID reuse guard as OnCastFinished.
+        _pending.RemoveAll(aoe => aoe.ActorID == caster.InstanceID && aoe.Activation <= WorldState.CurrentTime.AddSeconds(EventResolveTolerance));
         ++NumCasts;
     }
 
@@ -303,7 +381,7 @@ sealed class HorizontalRule(BossModule module) : Components.GenericAOEs(module)
 // ActiveAOEs calculation; globally painting every sector red is mechanically wrong.
 sealed class KnowledgeSectors(BossModule module) : Components.GenericAOEs(module)
 {
-    private enum SectorKind { Level3, Level4, Level4Wide, Level5, Prime, PrimeWide }
+    private enum SectorKind { Level3, Level3Wide, Level4, Level4Wide, Level5, Prime, PrimeWide }
     private readonly record struct SectorConfig(SectorKind Kind, AOEShape Shape, OID PageOID);
 
     private sealed class PendingSector(SectorKind kind, AOEShape shape, Angle rotation, DateTime activation, ulong casterID)
@@ -335,17 +413,11 @@ sealed class KnowledgeSectors(BossModule module) : Components.GenericAOEs(module
 
         foreach (var sector in _pending)
         {
-            // The helper's rotation is the authoritative sector direction. The damage cone
-            // originates at the arena center; page actors only announce the rule for that sector.
+            // The knowledge cone radiates from the boss (arena center) toward the announced
+            // direction; the page merely announces which rule the sector uses.
             var direction = sector.Rotation;
             if (!unknown && SatisfiesRule(level, sector.Kind))
-            {
-                // This sector is safe for this player: outline it green so the eye can see where to
-                // stand, without making it risky for automation.
-                _displayed.Add(new(sector.Shape, Module.Arena.Center, direction, sector.Activation,
-                    Colors.Safe, false, sector.Casters.FirstOrDefault(), sector.Shape.Distance(Module.Arena.Center, direction)));
-                continue;
-            }
+                continue; // safe sector: no zone drawn (the in-arena green guide was removed per user feedback)
 
             _displayed.Add(new(sector.Shape, Module.Arena.Center, direction, sector.Activation,
                 actorID: sector.Casters.FirstOrDefault(), shapeDistance: sector.Shape.Distance(Module.Arena.Center, direction)));
@@ -369,33 +441,6 @@ sealed class KnowledgeSectors(BossModule module) : Components.GenericAOEs(module
 
         var level = actor.ForayInfo.Level + correction;
         hints.Add($"Knowledge level {level} (base {actor.ForayInfo.Level} + {correction})");
-    }
-
-    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
-    {
-        base.AddAIHints(slot, actor, assignment, hints);
-
-        // The dangerous sectors are already forbidden by the base implementation; without a
-        // positive goal the AI just avoids them and never commits to a safe sector. Guide it into
-        // every sector that satisfies this player's rule, scoring deeper positions higher.
-        var correction = Correction(actor);
-        if (actor.ForayInfo.Level <= 0 || correction == 0)
-            return;
-        var level = actor.ForayInfo.Level + correction;
-
-        foreach (var sector in _pending)
-        {
-            if (!SatisfiesRule(level, sector.Kind))
-                continue;
-
-            var direction = sector.Rotation;
-            var shapeDistance = sector.Shape.Distance(Module.Arena.Center, direction);
-            hints.GoalZones.Add(position =>
-            {
-                var distance = shapeDistance.Distance(position);
-                return distance <= 0 ? Math.Clamp(-distance, 0f, 10f) : 0f;
-            });
-        }
     }
 
     public override void Update() => PruneExpired();
@@ -444,9 +489,14 @@ sealed class KnowledgeSectors(BossModule module) : Components.GenericAOEs(module
     private static SectorConfig? ConfigFor(uint actionID) => actionID switch
     {
         (uint)AID.KnowledgeLevel3Flare or (uint)AID.KnowledgeLevel3FlareAlt => new(SectorKind.Level3, Sector120, OID.Pages16),
+        (uint)AID.KnowledgeLevel3FlareWide or (uint)AID.KnowledgeLevel3FlareWideAlt or (uint)AID.PageLevel3Visual => new(SectorKind.Level3Wide, Sector180, OID.Pages16),
         (uint)AID.KnowledgeLevel4Holy or (uint)AID.KnowledgeLevel4HolyAlt => new(SectorKind.Level4, Sector120, OID.Pages8),
-        (uint)AID.KnowledgeLevel4HolyWide or (uint)AID.KnowledgeLevel4HolyWideAlt => new(SectorKind.Level4Wide, Sector180, OID.Pages8),
+        (uint)AID.KnowledgeLevel4HolyWide or (uint)AID.KnowledgeLevel4HolyWideAlt or (uint)AID.PageLevel4Visual => new(SectorKind.Level4Wide, Sector180, OID.Pages8),
         (uint)AID.KnowledgeLevel5Death or (uint)AID.KnowledgeLevel5DeathAlt => new(SectorKind.Level5, Sector120, OID.Pages64),
+        // The two-book rounds cast the 5级 sector with the page-side AIDs B8CC/50554 instead of
+        // B8CF/C57D, and each book covers a full 180-degree sector (not the 120 used by the
+        // three-book rounds); without these mappings that round showed no sector at all.
+        (uint)AID.KnowledgeLevel5DeathBook or (uint)AID.KnowledgeLevel5DeathBookAlt => new(SectorKind.Level5, Sector180, OID.Pages64),
         (uint)AID.PrimeKnowledgeLevelDeath or (uint)AID.PrimeKnowledgeLevelDeathAlt => new(SectorKind.Prime, Sector120, OID.Pages512),
         (uint)AID.PrimeKnowledgeLevelDeathWide or (uint)AID.PrimeKnowledgeLevelDeathWideAlt => new(SectorKind.PrimeWide, Sector180, OID.Pages512),
         _ => null
@@ -467,7 +517,7 @@ sealed class KnowledgeSectors(BossModule module) : Components.GenericAOEs(module
     // level satisfied. The sector is therefore SAFE only when the condition does NOT hold.
     private static bool SatisfiesRule(int level, SectorKind kind) => kind switch
     {
-        SectorKind.Level3 => level % 3 != 0,
+        SectorKind.Level3 or SectorKind.Level3Wide => level % 3 != 0,
         SectorKind.Level4 or SectorKind.Level4Wide => level % 4 != 0,
         SectorKind.Level5 => level % 5 != 0,
         SectorKind.Prime or SectorKind.PrimeWide => !IsPrime(level),
@@ -527,8 +577,6 @@ sealed class BookDropTower(BossModule module) : Components.GenericTowers(module,
         if (_pending.Count < WaveSize)
             return;
 
-        // 每波收齐后只固定选择一个 AI 目标，避免每帧重新选塔导致寻路抖动；所有塔仍保留
-        // 在 _visibleTowers 中给玩家绘制。
         for (var i = 0; i < MaxTowersPerWave; ++i)
         {
             var index = _rng.Next(_pending.Count);
@@ -559,7 +607,6 @@ sealed class BookDropTower(BossModule module) : Components.GenericTowers(module,
         }
     }
 
-    // Cast-finished 事件偶发缺失会留下残留塔; activation 过 2s 后强制清除。
     public override void Update()
     {
         var now = WorldState.CurrentTime;
@@ -601,9 +648,11 @@ sealed class ForbiddenFoliosStates : StateMachineBuilder
     GroupID = 1093u,
     NameID = 52u,
     SortOrder = 13)]
-// The encounter floor is circular (R20). Horizontal Rule still uses 100y rectangles, but anchors
-// them at the boss center so the arena clips each one to a full diameter instead of an offset chord.
-public sealed class ForbiddenFolios(WorldState ws, Actor primary) : BossModule(ws, primary, new(659f, 659f), new ArenaBoundsCircle(20f))
+// Circular arena, radius 24y: 2026-08-06 replay measured a player hugging the wall at 24.22y
+// from center (stops, probes, turns back), so the previous r20 excluded the outer ring from AI
+// pathfinding; 24f keeps 0.2y margin over the measured 24.22y. The Horizontal Rule lanes are
+// projected from outside (r26-36), which previously misled the bounds into a 25y square.
+public sealed class ForbiddenFolios(WorldState ws, Actor primary) : BossModule(ws, primary, new(659f, 659f), new ArenaBoundsCircle(24f))
 {
     protected override void DrawEnemies(int pcSlot, Actor pc)
     {
