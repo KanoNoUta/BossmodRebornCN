@@ -80,42 +80,14 @@ sealed class WhatGoesAroundAOEs(BossModule module) : ReplayValidatedCastAOEs(mod
 // B84F is split across three helpers. The boss cast is the stable advance warning.
 sealed class DarkIV(BossModule module) : Components.RaidwideCast(module, (uint)AID.DarkIV);
 
-sealed class ElectricBoundary(BossModule module) : Components.GenericAOEs(module)
-{
-    // ARR BFD0 deaths cluster at ~24.4y from center. Visual strip is 4.5y wide (2.25 half-width);
-    // AI pathfinding keeps a 1.5y extra margin on each side so it never routes into the fence.
-    private static readonly AOEShapeRect Shape = new(24.5f, 2.25f, 24.5f);
-    private static readonly AOEShapeRect AIShape = new(24.5f, 3.75f, 24.5f);
-    private readonly AOEInstance[] _aoes = Build(module.Arena.Center);
-
-    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoes;
-
-    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
-    {
-        foreach (var aoe in _aoes)
-            hints.AddForbiddenZone(AIShape.Distance(aoe.Origin, aoe.Rotation));
-    }
-
-    private static AOEInstance[] Build(WPos center)
-    {
-        var result = new AOEInstance[4];
-        for (var i = 0; i < result.Length; ++i)
-        {
-            var normal = (i * 90f).Degrees().ToDirection();
-            var rotation = Angle.FromDirection(normal.OrthoL());
-            var origin = center + 23.75f * normal;
-            result[i] = new(Shape, origin, rotation, color: Colors.Danger, risky: false, shapeDistance: Shape.Distance(origin, rotation));
-        }
-        return result;
-    }
-}
-
+// 2026-08-03: the upstream ElectricBoundary class (ARR BFD0 deaths ~24.4y) was NOT restored -
+// CN in-game observation shows the instakill boundary is a 21y SQUARE (see the module below);
+// the 24.5y square + fence overlay only drew dead zone between the fence and the kill boundary.
 sealed class WhatGoesAroundStates : StateMachineBuilder
 {
     public WhatGoesAroundStates(BossModule module) : base(module)
     {
         TrivialPhase()
-            .ActivateOnEnter<ElectricBoundary>()
             .ActivateOnEnter<WhatGoesAroundAOEs>()
             .ActivateOnEnter<DarkIV>();
     }
@@ -133,4 +105,8 @@ sealed class WhatGoesAroundStates : StateMachineBuilder
     GroupID = 1093u,
     NameID = 57u,
     SortOrder = 8)]
-public sealed class WhatGoesAround(WorldState ws, Actor primary) : BossModule(ws, primary, new(224f, -860f), new ArenaBoundsSquare(24.5f));
+// The instakill boundary is a square of 21y (confirmed by in-game observation; the kill zone is
+// square, not circular, center 224,-860).
+// 2026-08-07: arena bounds set to 20f (场地 20f，用户要求：删除场边即死区域，恢复简单方形).
+// 2026-08-16 场地半径 -0.3f：控制 AI 走位不贴紧即死边缘（方形场地半宽 20f→19.7f，整体收缩 0.3f）.
+public sealed class WhatGoesAround(WorldState ws, Actor primary) : BossModule(ws, primary, new(224f, -860f), new ArenaBoundsSquare(19.7f));
