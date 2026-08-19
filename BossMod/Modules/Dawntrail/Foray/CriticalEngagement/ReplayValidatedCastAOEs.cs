@@ -13,11 +13,13 @@ abstract class ReplayValidatedCastAOEs(BossModule module) : Components.GenericAO
     private const double EventDedupWindow = 2d;
     private const double ExpireDelay = 2d;
 
-    private sealed class PendingAOE(uint actionID, AOEInstance aoe)
+    protected sealed class PendingAOE(uint actionID, AOEInstance aoe)
     {
         public readonly uint ActionID = actionID;
         public AOEInstance AOE = aoe;
     }
+
+    protected ReadOnlySpan<PendingAOE> Pending => CollectionsMarshal.AsSpan(_pending);
 
     private readonly record struct ResolvedCast(uint ActionID, ulong ActorID, DateTime Activation, DateTime ExpiresAt);
     private readonly record struct EventKey(uint GlobalSequence, uint ActionID, ulong ActorID);
@@ -31,9 +33,22 @@ abstract class ReplayValidatedCastAOEs(BossModule module) : Components.GenericAO
     protected virtual int MaxDisplayed => int.MaxValue;
     protected virtual int MaxRisky => int.MaxValue;
     protected virtual double RiskyActivationWindow => double.PositiveInfinity;
+    // Some action groups reveal their whole sequence at once (e.g. three simultaneous cones).
+    // When RiskyByOrder matches, risk is graded purely by draw order (i < RiskyCountByOrder is
+    // dangerous) instead of by activation time. Defaults keep every other encounter unchanged.
+    protected virtual bool RiskyByOrder(uint actionID) => false;
+    protected virtual int RiskyCountByOrder => int.MaxValue;
     // Some mechanics split one timeline across several components. Let a component contribute an
     // earlier activation so later previews stay visible without becoming forbidden too soon.
     protected virtual DateTime? CompetingActivation => null;
+    // Some telegraphs keep a fixed display color regardless of the risk-window grading (e.g.
+    // CE210's CycloneCrossing cross: user-requested pale yellow 2026-08-02). Returning true pins
+    // the color; the risky flag still follows the framework's window grading.
+    protected virtual bool FixedColor(uint actionID, out uint color)
+    {
+        color = default;
+        return false;
+    }
 
     public DateTime? EarliestActivation
     {
@@ -59,12 +74,15 @@ abstract class ReplayValidatedCastAOEs(BossModule module) : Components.GenericAO
         for (var i = 0; i < count; ++i)
         {
             var aoe = _pending[i].AOE;
-            if (useRiskLimit)
+            var byOrder = RiskyByOrder(_pending[i].ActionID);
+            if (byOrder || useRiskLimit)
             {
-                var imminent = i < MaxRisky && aoe.Activation <= riskyDeadline;
+                var imminent = byOrder ? i < RiskyCountByOrder : i < MaxRisky && aoe.Activation <= riskyDeadline;
                 aoe.Color = imminent ? Colors.Danger : Colors.AOE;
                 aoe.Risky = imminent;
             }
+            if (FixedColor(_pending[i].ActionID, out var fixedColor))
+                aoe.Color = fixedColor; // pinned display color wins; risky keeps the grading
             _displayed.Add(aoe);
         }
         return CollectionsMarshal.AsSpan(_displayed);
@@ -123,6 +141,23 @@ abstract class ReplayValidatedCastAOEs(BossModule module) : Components.GenericAO
         ++NumCasts;
         var activation = RemoveResolvedByEvent(spell.Action.ID, caster.InstanceID, now) ?? now;
         RememberResolved(spell.Action.ID, caster.InstanceID, activation, now);
+    }
+
+    // AI 避让入口：默认把所有 Risky AOE 加为禁区（与 GenericAOEs 行为一致）。子类可 override
+    // AddAOEForbiddenZones 定制 AI 层紧迫值（如 CE214 溅墨的分组方案），显示层 ActiveAOEs 不受影响。
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+        => AddAOEForbiddenZones(slot, actor, assignment, hints);
+
+    protected virtual void AddAOEForbiddenZones(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        var aoes = ActiveAOEs(slot, actor);
+        var len = aoes.Length;
+        for (var i = 0; i < len; ++i)
+        {
+            ref readonly var c = ref aoes[i];
+            if (c.Risky)
+                hints.AddForbiddenZone(c.ShapeDistance ?? c.Shape.Distance(c.Origin, c.Rotation), c.Activation);
+        }
     }
 
     public override void OnActorDeath(Actor actor) => RemoveActor(actor.InstanceID);
