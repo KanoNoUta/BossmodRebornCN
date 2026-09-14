@@ -187,7 +187,7 @@ public sealed class ConfigUI : IDisposable
         ImGui.Separator();
         ImGui.Text("其他命令：");
         ImGui.Separator();
-        for (var i = 0; i < 9; ++i)
+        for (var i = 0; i < _availableOtherCommands.Length; ++i)
         {
             ref readonly var text = ref _availableOtherCommands[i];
             ImGui.Text($"/bmr {text.Item1}: {text.Item2}");

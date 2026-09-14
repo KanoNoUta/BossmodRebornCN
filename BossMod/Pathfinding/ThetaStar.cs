@@ -181,17 +181,19 @@ public sealed class ThetaStar
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int Execute()
     {
-        var pixelMaxG = _map.PixelMaxG;
-        while (_fallbackIndex == StartNodeIndex && ExecuteStep())
-        {
-            ref var nd = ref _nodes[_bestIndex]; // instead of only looking for the perfect cell we search for a cell that is reasonably better
-            var isLeeWayOverZero = nd.PathLeeway > 0f;
-            if (isLeeWayOverZero && nd.Score >= Score.SafeMaxPrio || !isLeeWayOverZero && nd.Score > _startScore && pixelMaxG[_bestIndex] > pixelMaxG[StartNodeIndex] + 2f || nd.HScore <= 0f)
-            {
-                break;
-            }
-        }
+        while (ExecuteStepToGoal()) { }
         return BestIndex();
+    }
+
+    public bool ExecuteStepToGoal()
+    {
+        if (_fallbackIndex != StartNodeIndex || !ExecuteStep())
+            return false;
+        ref var nd = ref _nodes[_bestIndex];
+        var positiveLeeway = nd.PathLeeway > 0f;
+        return !(positiveLeeway && nd.Score >= Score.SafeMaxPrio
+            || !positiveLeeway && nd.Score > _startScore && _map.PixelMaxG[_bestIndex] > _map.PixelMaxG[StartNodeIndex] + 2f
+            || nd.HScore <= 0f);
     }
 
     public int BestIndex()
@@ -210,8 +212,11 @@ public sealed class ThetaStar
             var parentIndex = ndp.ParentIndex;
 
             ref var current = ref _nodes[parentIndex];
+            var remaining = _map.Width * _map.Height;
             while (current.Score < _startScore)
             {
+                if (--remaining == 0 || current.ParentIndex == parentIndex)
+                    return StartNodeIndex;
                 destIndex = parentIndex;
                 ref var ndd = ref current;
                 parentIndex = current.ParentIndex;

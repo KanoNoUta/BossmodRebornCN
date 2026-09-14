@@ -46,6 +46,7 @@ public sealed unsafe class ActionManagerEx : IDisposable
 
     public static readonly ActionTweaksConfig Config = Service.Config.Get<ActionTweaksConfig>();
     public ActionQueue.Entry AutoQueue;
+    private bool _gameplayEnabled = true;
     public bool MoveMightInterruptCast; // if true, moving now might cause cast interruption (for current or queued cast)
     private readonly ActionManager* _inst = ActionManager.Instance();
     private readonly WorldState _ws;
@@ -119,6 +120,21 @@ public sealed unsafe class ActionManagerEx : IDisposable
         _useActionHook.Dispose();
         _updateHook.Dispose();
         _oocActionsTweak.Dispose();
+    }
+
+    // Suspend input hooks during logout and temporary player/territory loading.
+    public void SetGameplayEnabled(bool enabled)
+    {
+        _gameplayEnabled = enabled;
+        if (!enabled)
+        {
+            AutoQueue = default;
+            _manualQueue.Clear();
+            _movement.MovementBlocked = false;
+        }
+        _updateHook.Enabled = _useActionHook.Enabled = _useActionLocationHook.Enabled = enabled;
+        _useBozjaFromHolsterDirectorHook.Enabled = _usePomanderHook.Enabled = _useStoneHook.Enabled = enabled;
+        _setAutoAttackStateHook.Enabled = enabled;
     }
 
     public void QueueManualActions()
@@ -758,6 +774,11 @@ public sealed unsafe class ActionManagerEx : IDisposable
         var prevAnimLock = _inst->AnimationLock;
         _processPacketActionEffectHook.Original(casterID, casterObj, targetPos, header, effects, targets);
         var currAnimLock = _inst->AnimationLock;
+
+        // World-state observation remains active during player loading,
+        // but manual actions must retain the game's normal animation lock.
+        if (!_gameplayEnabled)
+            return;
 
         if (casterID != UIState.Instance()->PlayerState.EntityId || !ExpectAnimationLockUpdate(header))
         {

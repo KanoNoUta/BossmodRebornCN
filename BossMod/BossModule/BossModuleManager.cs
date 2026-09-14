@@ -1,4 +1,4 @@
-﻿namespace BossMod;
+namespace BossMod;
 
 // class that creates and manages instances of proper boss modules in response to world state changes
 [SkipLocalsInit]
@@ -60,6 +60,10 @@ public sealed class BossModuleManager : IDisposable
 
         LoadedModules.Clear();
 
+        foreach (var m in PendingModules)
+            m.Dispose();
+        PendingModules.Clear();
+
         _subsciptions.Dispose();
         RaidCooldowns.Dispose();
     }
@@ -79,6 +83,8 @@ public sealed class BossModuleManager : IDisposable
             for (var i = countP; i >= 0; --i)
             {
                 var m = PendingModules[i];
+                if (m is Dawntrail.Foray.Crucible.RecordedCrucibleModule group)
+                    group.RefreshPrimaryActor();
                 var prim = m.PrimaryActor;
                 if (prim.IsDeadOrDestroyed)
                 {
@@ -258,9 +264,25 @@ public sealed class BossModuleManager : IDisposable
 
     private void ActorAdded(Actor actor)
     {
+        // CN 定制：斗兽奇弈的敌人 OID 无法从客户端表静态推出，先按 NameID/名字把真实 OID
+        // 映射到对应模块，再走正常注册流程（详见 Modules/Dawntrail/Foray/Crucible/CrucibleOIDResolver.cs）。
+        Dawntrail.Foray.Crucible.CrucibleOIDResolver.TryRegister(actor);
+
         var m = BossModuleRegistry.CreateModuleForActor(WorldState, actor, Config.MinMaturity);
         if (m != null)
         {
+            if (m is Dawntrail.Foray.Crucible.RecordedCrucibleModule)
+            {
+                // A recorded Crucible group has several distinct enemy OIDs but one state machine.
+                var existingGroup = LoadedModules.Concat(PendingModules).FirstOrDefault(other => other.GetType() == m.GetType());
+                if (existingGroup != null)
+                {
+                    if (existingGroup.PrimaryActor.InstanceID == actor.InstanceID || existingGroup.PrimaryActor.IsDeadOrDestroyed)
+                        existingGroup.PrimaryActor = actor;
+                    m.Dispose();
+                    return;
+                }
+            }
             var count = LoadedModules.Count;
             for (var i = 0; i < count; ++i)
             {

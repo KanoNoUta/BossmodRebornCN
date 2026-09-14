@@ -4,3 +4,9 @@ bin/
 *.user
 logs/
 **/.idea/**
+
+# Local diagnostics, old packages and DLL backups are not publication sources.
+/build/
+/analysis/
+/BossMod/build/
+*.bak-*

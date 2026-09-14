@@ -22,6 +22,12 @@ public sealed class ManualActionQueueTweak(WorldState ws, AIHints hints)
     private readonly List<Entry> _queue = [];
     private bool _emergencyMode;
 
+    public void Clear()
+    {
+        _queue.Clear();
+        _emergencyMode = false;
+    }
+
     private static bool IsRSREnabled()
     {
         try

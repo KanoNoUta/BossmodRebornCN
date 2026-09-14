@@ -1,6 +1,5 @@
 ﻿using BossMod.Autorotation;
 using BossMod.Pathfinding;
-using System.Threading;
 
 namespace BossMod.AI;
 
@@ -19,7 +18,8 @@ sealed class AIBehaviour(AIController ctrl, RotationModuleManager autorot, Prese
     public float ForceMovementIn = float.MaxValue; // TODO: reconsider
     public Preset? AIPreset = aiPreset;
     private static readonly AIConfig _config = Service.Config.Get<AIConfig>();
-    private readonly NavigationDecision.Context _naviCtx = new();
+    private readonly NavigationDecision.IncrementalBuilder _navigation = new();
+    private NavigationDecision.Context _naviCtx => _navigation.Context;
     private NavigationDecision _naviDecision;
     private bool _afkMode;
     private bool _followMaster; // if true, our navigation target is master rather than primary target - this happens e.g. in outdoor or in dungeons during gathering trash
@@ -27,22 +27,24 @@ sealed class AIBehaviour(AIController ctrl, RotationModuleManager autorot, Prese
     private WPos _masterMovementStart;
     private DateTime _masterLastMoved;
     private DateTime _navStartTime; // if current time is < this, navigation won't start
-    private static readonly SemaphoreSlim _semaphore = new(1, 1);
     private static readonly Random random = new();
 
-    private bool cancel; // used to cancel autorotation AI preset during async
+    private bool cancel;
 
     public void Dispose() => cancel = true;
 
-    public async Task Execute(Actor player, Actor master)
+    public void Execute(Actor player, Actor master)
     {
-        if (await _semaphore.WaitAsync(0).ConfigureAwait(false))
+        if (!cancel)
         {
             try
             {
                 ForceMovementIn = float.MaxValue;
                 if (player.IsDead)
                 {
+                    _navigation.Reset();
+                    _naviDecision = default;
+                    ctrl.Clear();
                     return;
                 }
 
@@ -91,12 +93,17 @@ sealed class AIBehaviour(AIController ctrl, RotationModuleManager autorot, Prese
                 {
                     var actorTarget = autorot.WorldState.Actors.Find(player.TargetID);
                     var naviDecision = followTarget && actorTarget != null
-                        ? await BuildNavigationDecision(player, actorTarget, target).ConfigureAwait(false)
-                        : await BuildNavigationDecision(player, master, target).ConfigureAwait(false);
+                        ? BuildNavigationDecision(player, actorTarget, target)
+                        : BuildNavigationDecision(player, master, target);
+
                     _naviDecision = naviDecision;
 
                     // there is a difference between having a small positive leeway and having a negative one for pathfinding, prefer to keep positive
                     _naviDecision.LeewaySeconds = Math.Max(0, _naviDecision.LeewaySeconds - 0.1f);
+                }
+                else
+                {
+                    _navigation.Reset();
                 }
 
                 var masterIsMoving = TrackMasterMovement(master);
@@ -119,12 +126,19 @@ sealed class AIBehaviour(AIController ctrl, RotationModuleManager autorot, Prese
                         hints.SpinDirection = player.DirectionTo(dest).ToAngle();
                     }
                 }
+                if (cancel)
+                {
+                    return;
+                }
+
                 // 2026-08-16 用户要求：强制移动即将开始（伊阿姆柏预瞄末段设 ForcedMarchImminent）也并入停手停走
                 UpdateMovement(player, master, gazeImminent || pyreticImminent || hints.ForcedMarchImminent, misdirectionMode ? hints.MisdirectionThreshold : default, !forbidTargeting ? hints.ActionsToExecute : null);
             }
-            finally
+            catch
             {
-                _semaphore.Release();
+                _navigation.Reset();
+                _naviDecision = default;
+                throw;
             }
         }
     }
@@ -223,16 +237,18 @@ sealed class AIBehaviour(AIController ctrl, RotationModuleManager autorot, Prese
         }
     }
 
-    private async Task<NavigationDecision> BuildNavigationDecision(Actor player, Actor master, Targeting targeting)
+    private NavigationDecision BuildNavigationDecision(Actor player, Actor master, Targeting targeting)
     {
         if (_config.ForbidMovement || _config.ForbidAIMovementMounted && player.MountId != default
             || autorot.Hints.ImminentSpecialMode.mode is AIHints.SpecialMode.NoMovement or AIHints.SpecialMode.Pyretic && autorot.Hints.ImminentSpecialMode.activation <= WorldState.FutureTime(1d))
         {
+            _navigation.Reset();
             return new() { LeewaySeconds = float.MaxValue };
         }
 
         if (autorot.Hints.ImminentSpecialMode.mode == AIHints.SpecialMode.Freezing && autorot.Hints.ImminentSpecialMode.activation <= WorldState.FutureTime(2.1d))
         {
+            _navigation.Reset();
             var randomO1 = random.NextSingle() * 2f - 1f;
             var randomO2 = random.NextSingle() * 2f - 1f;
             var pos = player.Position;
@@ -289,7 +305,7 @@ sealed class AIBehaviour(AIController ctrl, RotationModuleManager autorot, Prese
                     autorot.Hints.GoalZones.Add(AIHints.GoalDonut(target.Position, min, max, 2f));
                 }
             }
-            return await Task.Run(() => NavigationDecision.Build(_naviCtx, WorldState.CurrentTime, autorot.Hints, player, autorot.Bossmods.WorldState.Client.MoveSpeed, forbiddenZoneCushion: _config.PreferredDistance)).ConfigureAwait(false);
+            return AdvanceNavigation(player);
         }
 
         // TODO: remove this once all rotation modules are fixed
@@ -298,7 +314,18 @@ sealed class AIBehaviour(AIController ctrl, RotationModuleManager autorot, Prese
             autorot.Hints.GoalZones.Add(AIHints.GoalSingleTarget(targeting.Target.Actor, targeting.PreferredPosition, targeting.PreferredRange));
         }
 
-        return await Task.Run(() => NavigationDecision.Build(_naviCtx, WorldState.CurrentTime, autorot.Hints, player, autorot.Bossmods.WorldState.Client.MoveSpeed, _config.PreferredDistance)).ConfigureAwait(false);
+        return AdvanceNavigation(player);
+    }
+
+    private NavigationDecision AdvanceNavigation(Actor player)
+        => _navigation.Update(WorldState.CurrentTime, autorot.Hints, player, WorldState.Client.MoveSpeed, _config.PreferredDistance, out var decision)
+            ? decision : _navigation.PreviousDecisionValid ? _naviDecision : default;
+
+    public void Suspend()
+    {
+        _navigation.Reset();
+        _naviDecision = default;
+        ctrl.Clear();
     }
 
     private void FocusMaster(Actor master)

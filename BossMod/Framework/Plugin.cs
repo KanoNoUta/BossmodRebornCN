@@ -14,11 +14,20 @@ namespace BossMod;
 
 public sealed class Plugin : IAsyncDalamudPlugin
 {
-    public string Name => "BossMod Reborn";
+#if BMR_CRUCIBLE_TEST
+    public string Name => "BossModReborn 斗兽版本 测试";
+#else
+    public string Name => "BossModReborn 斗兽版本";
+#endif
 
     private readonly IDalamudPluginInterface _dalamud;
     private readonly ICommandManager CommandManager;
     private readonly string _gameVersion = "unknown";
+    private bool _initialized;
+    private bool _initializationAttempted;
+    private bool _runtimeDisposed;
+    private bool _gameplayEnabled;
+    private bool _commandRegistered;
 
     private RotationDatabase _rotationDB = null!;
     private WorldState _ws = null!;
@@ -80,6 +89,10 @@ public sealed class Plugin : IAsyncDalamudPlugin
 
     public async Task LoadAsync(CancellationToken cancellationToken)
     {
+#if BMR_CRUCIBLE_TEST
+        if (_dalamud.InstalledPlugins.Any(p => p.IsLoaded && p.InternalName is "BossModReborn" or "BossMod"))
+            throw new InvalidOperationException("请先禁用原版 BossMod / BossModReborn，再启用 BossMod 斗兽版本 测试。两版共用战斗接口，不能同时启用。");
+#endif
         await Task.Run(InteropGenerator.Runtime.Resolver.GetInstance.Resolve, cancellationToken);
 
         await Task.Run(() =>
@@ -92,7 +105,21 @@ public sealed class Plugin : IAsyncDalamudPlugin
                 new(_dalamud.AssemblyLocation.DirectoryName! + "/DefaultRotationPresets.json"));
         }, cancellationToken);
 
-        await Service.Framework.RunOnFrameworkThread(InitOnFrameworkThread);
+        await Service.Framework.RunOnFrameworkThread(() =>
+        {
+            _commandRegistered = CommandManager.AddHandler("/bmr", new CommandInfo((cmd, args) =>
+            {
+                if (!_initialized || _runtimeDisposed) return;
+                OnCommand(cmd, args);
+            }) { HelpMessage = "Show BossMod settings" });
+            if (!_commandRegistered)
+                throw new InvalidOperationException("/bmr 已被其他插件使用，请禁用另一版本的 BossMod 后重试。");
+            _dalamud.UiBuilder.DisableAutomaticUiHide = true;
+            _dalamud.UiBuilder.Draw += DrawUI;
+            _dalamud.UiBuilder.OpenMainUi += OpenMainUI;
+            _dalamud.UiBuilder.OpenConfigUi += OpenMainUI;
+            Service.Framework.Update += OnFrameworkUpdate;
+        });
     }
 
     private unsafe void InitOnFrameworkThread()
@@ -103,8 +130,6 @@ public sealed class Plugin : IAsyncDalamudPlugin
         Camera.Instance = new();
 
         Service.Config.Modified.Subscribe(() => Task.Run(() => Service.Config.SaveToFile(_dalamud.ConfigFile)));
-
-        CommandManager.AddHandler("/bmr", new CommandInfo(OnCommand) { HelpMessage = "Show boss mod settings UI" });
 
         ActionDefinitions.Instance.UnlockCheck = QuestUnlocked; // ensure action definitions are initialized and set unlock check functor (we don't really store the quest progress in clientstate, for now at least)
 
@@ -137,10 +162,8 @@ public sealed class Plugin : IAsyncDalamudPlugin
         _wndRotation = new(_rotation, _amex, () => OpenConfigUI("Autorotation presets"));
         _wndDebug = new(_ws, _rotation, _zonemod, _amex, _movementOverride, _hintsBuilder, _dalamud, _rsr);
 
-        _dalamud.UiBuilder.DisableAutomaticUiHide = true;
-        _dalamud.UiBuilder.Draw += DrawUI;
-        _dalamud.UiBuilder.OpenMainUi += () => OpenConfigUI();
-        _dalamud.UiBuilder.OpenConfigUi += () => OpenConfigUI();
+        _initialized = true;
+        _gameplayEnabled = true;
     }
 
     public async ValueTask DisposeAsync()
@@ -148,30 +171,34 @@ public sealed class Plugin : IAsyncDalamudPlugin
         await Service.Framework.RunOnFrameworkThread(() =>
         {
             _dalamud.UiBuilder.Draw -= DrawUI;
+            _dalamud.UiBuilder.OpenMainUi -= OpenMainUI;
+            _dalamud.UiBuilder.OpenConfigUi -= OpenMainUI;
             Service.Condition.ConditionChange -= OnConditionChanged;
+            Service.Framework.Update -= OnFrameworkUpdate;
         });
+        if (_commandRegistered)
+        {
+            CommandManager.RemoveHandler("/bmr");
+            _commandRegistered = false;
+        }
+        DisposeRuntime();
+    }
+
+    private void DisposeRuntime()
+    {
+        if (_runtimeDisposed || !_initializationAttempted)
+            return;
+        _runtimeDisposed = true;
+        Service.Condition.ConditionChange -= OnConditionChanged;
         ReplayVisualization.GaugeVisualizer.Dispose();
-        _wndDebug.Dispose();
-        _wndRotation.Dispose();
-        _wndReplay.Dispose();
-        _wndZone.Dispose();
-        _wndBossmodHints.Dispose();
-        _wndBossmod.Dispose();
-        _configUI.Dispose();
-        _partyRoles.Dispose();
-        _mbox.Dispose();
-        _dtr.Dispose();
-        _ipc.Dispose();
-        _ai.Dispose();
-        _rotation.Dispose();
-        _wsSync.Dispose();
-        _amex.Dispose();
-        _movementOverride.Dispose();
-        _hintsBuilder.Dispose();
-        _zonemod.Dispose();
-        _bossmod.Dispose();
-        _rsr.Dispose();
-        CommandManager.RemoveHandler("/bmr");
+        IDisposable?[] resources = [_wndDebug, _wndRotation, _wndReplay, _wndZone, _wndBossmodHints,
+            _wndBossmod, _configUI, _partyRoles, _mbox, _dtr, _ipc, _ai, _rotation, _wsSync,
+            _amex, _movementOverride, _hintsBuilder, _zonemod, _bossmod, _rsr];
+        foreach (var resource in resources)
+        {
+            try { resource?.Dispose(); }
+            catch (Exception ex) { Service.Logger.Error(ex, "Failed to dispose BossMod runtime resource"); }
+        }
         GarbageCollection();
     }
 
@@ -291,12 +318,31 @@ public sealed class Plugin : IAsyncDalamudPlugin
         _ = new UISimpleWindow("BossModReborn", _configUI.Draw, true, new(300, 300));
     }
 
+    private void OpenMainUI()
+    {
+        if (_initialized && !_runtimeDisposed) OpenConfigUI();
+    }
+
     private void DrawUI()
+    {
+        if (!_initialized || _runtimeDisposed)
+            return;
+
+        // DTR.Update opens an ImGui popup, so it must stay in the draw callback.
+        _dtr.Update();
+        var uiHidden = Service.GameGui.GameUiHidden || Service.Condition[ConditionFlag.OccupiedInCutSceneEvent] || Service.Condition[ConditionFlag.WatchingCutscene78] || Service.Condition[ConditionFlag.WatchingCutscene];
+        if (!uiHidden)
+            Service.WindowSystem?.Draw();
+        Camera.Instance?.DrawWorldPrimitives();
+    }
+
+    // World observation, mechanic deadlines and movement must run on game
+    // updates even when rendering is paused (background/minimized/hidden UI).
+    private void UpdateRuntime()
     {
         var tsStart = DateTime.Now;
         var moveImminent = _movementOverride.IsMoveRequested() && (!ActionManagerEx.Config.PreventMovingWhileCasting || _movementOverride.IsForceUnblocked());
 
-        _dtr.Update();
         Camera.Instance?.Update();
         _wsSync.Update(_prevUpdateTime);
         _partyRoles.Update();
@@ -308,17 +354,66 @@ public sealed class Plugin : IAsyncDalamudPlugin
         _ai.Update();
         _broadcast.Update();
         _amex.FinishActionGather();
-
-        var uiHidden = Service.GameGui.GameUiHidden || Service.Condition[ConditionFlag.OccupiedInCutSceneEvent] || Service.Condition[ConditionFlag.WatchingCutscene78] || Service.Condition[ConditionFlag.WatchingCutscene];
-        if (!uiHidden)
+        if (!_gameplayEnabled)
         {
-            Service.WindowSystem?.Draw();
+            _amex.SetGameplayEnabled(true);
+            _movementOverride.SetGameplayEnabled(true);
+            _gameplayEnabled = true;
         }
 
         ExecuteHints();
-
-        Camera.Instance?.DrawWorldPrimitives();
         _prevUpdateTime = DateTime.Now - tsStart;
+    }
+
+    private void OnFrameworkUpdate(IFramework framework)
+    {
+        if (_runtimeDisposed)
+            return;
+        if (!_initialized)
+        {
+            if (!_initializationAttempted)
+            {
+                _initializationAttempted = true;
+                try { InitOnFrameworkThread(); }
+                catch (Exception ex)
+                {
+                    Service.Logger.Error(ex, "BossMod initialization failed");
+                    DisposeRuntime();
+                }
+            }
+            return;
+        }
+        var player = Service.PlayerState;
+        var loggedIn = Service.ClientState.IsLoggedIn;
+        // Loading/territory transitions can temporarily remove PlayerState.
+        // Pause input until the player returns, while preserving AI ON.
+        if (loggedIn && (!player.IsLoaded || player.ContentId == 0))
+        {
+            if (_initialized)
+            {
+                _amex.SetGameplayEnabled(false);
+                _movementOverride.SetGameplayEnabled(false);
+                _ai.Suspend();
+                _hints.Clear();
+                _gameplayEnabled = false;
+                _wsSync.Update(_prevUpdateTime);
+            }
+            return;
+        }
+        if (!loggedIn)
+        {
+            if (_gameplayEnabled)
+            {
+                _amex.SetGameplayEnabled(false);
+                _movementOverride.SetGameplayEnabled(false);
+                _gameplayEnabled = false;
+            }
+            _ai.SwitchToIdle();
+            _hints.Clear();
+            _wsSync.Update(_prevUpdateTime);
+            return;
+        }
+        UpdateRuntime();
     }
 
     private unsafe bool QuestUnlocked(uint link)

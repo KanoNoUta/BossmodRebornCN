@@ -171,7 +171,8 @@ public static class BossModuleRegistry
     public static Info? FindByOID(uint oid) => RegisteredModules.GetValueOrDefault(oid);
     public static Info? FindByType(Type type) => _modulesByType.GetValueOrDefault(type);
 
-    public static BossModule? CreateModule(Info? info, WorldState ws, Actor primary) => info?.ModuleFactory(ws, primary);
+    public static BossModule? CreateModule(Info? info, WorldState ws, Actor primary)
+        => info?.ModuleFactory(ws, primary);
 
     public static BossModule? CreateModuleForActor(WorldState ws, Actor primary, BossModuleInfo.Maturity minMaturity)
     {
@@ -192,5 +193,9 @@ public static class BossModuleRegistry
     }
 
     // TODO: this is a hack...
-    public static BossModule? CreateModuleForTimeline(uint oid) => CreateModule(FindByOID(oid), new(TimeSpan.TicksPerSecond, "fake"), new(0, oid, -1, 0, "", 0, ActorType.None, Class.None, 0, default));
+    public static BossModule? CreateModuleForTimeline(uint oid)
+    {
+        var info = FindByOID(oid);
+        return info != null ? CreateModule(info, new(TimeSpan.TicksPerSecond, "fake"), new(0, oid, -1, 0, "", 0, ActorType.None, Class.None, 0, default)) : null;
+    }
 }

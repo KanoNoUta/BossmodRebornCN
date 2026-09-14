@@ -1,9 +1,9 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <Authors></Authors>
     <Company></Company>
-    <Version>7.5.5.44</Version>
+    <Version>7.5.6.7</Version>
     <Description>Boss mod.</Description>
     <Copyright></Copyright>
     <PackageProjectUrl></PackageProjectUrl>
@@ -12,6 +12,12 @@
 <PropertyGroup>
   <AssemblyName>BossModReborn</AssemblyName>
 </PropertyGroup>
+
+  <PropertyGroup Condition="'$(CrucibleTestBuild)' == 'true'">
+    <!-- Pawprint resolves the live BossMod provider by InternalName and assembly name. -->
+    <AssemblyName>BossModReborn</AssemblyName>
+    <DefineConstants>$(DefineConstants);BMR_CRUCIBLE_TEST</DefineConstants>
+  </PropertyGroup>
 
   <PropertyGroup>
     <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
@@ -114,7 +120,7 @@
 
   <Target Name="CleanupOutput" AfterTargets="Build" BeforeTargets="DalamudPackage">
     <ItemGroup>
-      <_ExtraOutputFiles Include="$(OutputPath)*" Exclude="$(OutputPath)BossModReborn.*;$(OutputPath)DefaultRotationPresets.json;$(OutputPath)RebornPresets.json;$(OutputPath)PInvoke.User32.dll" />
+      <_ExtraOutputFiles Include="$(OutputPath)*" Exclude="$(OutputPath)$(AssemblyName).*;$(OutputPath)DefaultRotationPresets.json;$(OutputPath)RebornPresets.json;$(OutputPath)PInvoke.User32.dll" />
     </ItemGroup>
     <Delete Files="@(_ExtraOutputFiles)" />
   </Target>

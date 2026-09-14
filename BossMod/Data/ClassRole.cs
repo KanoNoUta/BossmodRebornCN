@@ -1,4 +1,4 @@
-﻿namespace BossMod;
+namespace BossMod;
 
 public enum Class : byte
 {
@@ -45,6 +45,7 @@ public enum Class : byte
     SGE = 40,
     VPR = 41,
     PCT = 42,
+    BST = 43, // 驯兽师（受限职业；ClassJob.Role=2 → 近战 DPS）
 }
 
 public enum ClassCategory
@@ -77,6 +78,9 @@ public static class ClassRole
         Class.ARC or Class.BRD or Class.MCH or Class.DNC => ClassCategory.PhysRanged,
         Class.THM or Class.BLM or Class.ACN or Class.SMN or Class.RDM or Class.PCT => ClassCategory.Caster,
         Class.BLU => allowLimited ? ClassCategory.Limited : ClassCategory.Caster,
+        // 驯兽师虽然和青魔一样是受限职业，但游戏里 ClassJob.Role=2（近战）。
+        // 之前没登记，于是落进 Undefined→Role.None，被队伍分工兜底安排到远程(R1/R2)。
+        Class.BST => ClassCategory.Melee,
         _ => ClassCategory.Undefined
     };
 

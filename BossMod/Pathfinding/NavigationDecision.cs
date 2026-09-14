@@ -39,11 +39,19 @@ public struct NavigationDecision
 
     public static NavigationDecision Build(Context ctx, DateTime currentTime, AIHints hints, Actor player, float playerSpeed = 6f, float forbiddenZoneCushion = default)
     {
+        var rasterTime = Prepare(ctx, currentTime, hints, player, playerSpeed, forbiddenZoneCushion);
+        var start = Stopwatch.GetTimestamp();
+        return Finish(ctx, player.Position, ctx.ThetaStar.Execute(), rasterTime, Stopwatch.GetTimestamp() - start);
+    }
+
+    private static long Prepare(Context ctx, DateTime currentTime, AIHints hints, Actor player, float playerSpeed, float forbiddenZoneCushion)
+    {
         var startTime = Stopwatch.GetTimestamp();
 
         hints.InitPathfindMap(ctx.Map);
         var pos = player.Position;
-        // make local copies of forbidden zones and goals to ensure no race conditions during async pathfinding
+        // Called on the framework thread. Parallel rasterization finishes before
+        // returning, so live actors and goal closures cannot change mid-frame.
         if (hints.TemporaryObstacles.Count != 0)
         {
             RasterizeVoidzones(ctx.Map, [.. hints.TemporaryObstacles]);
@@ -74,15 +82,69 @@ public struct NavigationDecision
             ctx.Map.BuildTeleporterEdges([.. hints.Teleporters]);
         }
 
-        var rasterFinish = Stopwatch.GetTimestamp();
+        ctx.ThetaStar.Start(ctx.Map, pos, 1f / (float.IsFinite(playerSpeed) && playerSpeed > 0 ? playerSpeed : 6f));
+        return Stopwatch.GetTimestamp() - startTime;
+    }
 
-        // execute pathfinding
-        ctx.ThetaStar.Start(ctx.Map, pos, 1f / playerSpeed);
-        var bestNodeIndex = ctx.ThetaStar.Execute();
+    private static NavigationDecision Finish(Context ctx, WPos pos, int bestNodeIndex, long rasterTime, long pathfindTime)
+    {
         ref var bestNode = ref ctx.ThetaStar.NodeByIndex(bestNodeIndex);
         var waypoints = GetFirstWaypoints(ctx.ThetaStar, ctx.Map, bestNodeIndex, pos);
-        var finishTime = Stopwatch.GetTimestamp();
-        return new NavigationDecision() { Destination = waypoints.first, NextWaypoint = waypoints.second, LeewaySeconds = bestNode.PathLeeway, TimeToGoal = bestNode.GScore, PathfindTime = finishTime - rasterFinish, RasterizeTime = rasterFinish - startTime };
+        return new() { Destination = waypoints.first, NextWaypoint = waypoints.second, LeewaySeconds = bestNode.PathLeeway, TimeToGoal = bestNode.GScore, PathfindTime = pathfindTime, RasterizeTime = rasterTime };
+    }
+
+    // Search a frozen numeric map in small slices on the framework thread. No
+    // task can retain live hints, block a semaphore, or write into a later frame.
+    public sealed class IncrementalBuilder
+    {
+        public readonly Context Context = new();
+        private bool _searching;
+        private long _started, _rasterTime, _searchTime;
+        private DateTime _worldTime;
+        private WPos _position, _center;
+        private ArenaBounds? _bounds;
+        public bool PreviousDecisionValid { get; private set; }
+
+        public void Reset() => _searching = PreviousDecisionValid = false;
+
+        public bool Update(DateTime now, AIHints hints, Actor player, float speed, float cushion, out NavigationDecision decision)
+        {
+            decision = default;
+            if (_center != hints.PathfindMapCenter || !ReferenceEquals(_bounds, hints.PathfindMapBounds)
+                || (player.Position - _position).LengthSq() > 9 || now < _worldTime)
+                Reset();
+            if (!_searching)
+            {
+                _rasterTime = Prepare(Context, now, hints, player, speed, cushion);
+                _position = player.Position;
+                _center = hints.PathfindMapCenter;
+                _bounds = hints.PathfindMapBounds;
+                _worldTime = now;
+                _started = Stopwatch.GetTimestamp();
+                _searchTime = 0;
+                _searching = true;
+            }
+            var sliceStart = Stopwatch.GetTimestamp();
+            for (var i = 0; i < 512; ++i)
+            {
+                var done = !Context.ThetaStar.ExecuteStepToGoal();
+                // Even a pathological search must yield a result and refresh
+                // its map; never keep navigating an old arena indefinitely.
+                if (done || Stopwatch.GetElapsedTime(_started).TotalMilliseconds >= 100 || (now - _worldTime).TotalMilliseconds >= 100)
+                {
+                    _searchTime += Stopwatch.GetTimestamp() - sliceStart;
+                    _searching = false;
+                    PreviousDecisionValid = true;
+                    decision = Finish(Context, _position, Context.ThetaStar.BestIndex(), _rasterTime, _searchTime);
+                    decision.LeewaySeconds -= (float)(now - _worldTime).TotalSeconds;
+                    return true;
+                }
+                if (Stopwatch.GetElapsedTime(sliceStart).TotalMilliseconds >= 2)
+                    break;
+            }
+            _searchTime += Stopwatch.GetTimestamp() - sliceStart;
+            return false;
+        }
     }
 
     private static void AvoidForbiddenZone(Map map, float forbiddenZoneCushion)
@@ -172,7 +234,7 @@ public struct NavigationDecision
                     init = globalMax;
                     newVal = localMax > init ? localMax : init;
                 }
-                while (init != Interlocked.CompareExchange(ref globalMax, newVal, init));
+                while (!init.Equals(Interlocked.CompareExchange(ref globalMax, newVal, init)));
             });
 
         map.MaxPriority = globalMax;
@@ -490,7 +552,7 @@ public struct NavigationDecision
                         var leftP = 0f;
                         for (var i = 0; i < len; ++i)
                         {
-                            leftP += goals[i](leftPos);
+                            leftP += FiniteGoal(goals[i], leftPos);
                         }
 
                         for (var x = 0; x < width; ++x)
@@ -499,7 +561,7 @@ public struct NavigationDecision
                             var rightP = 0f;
                             for (var i = 0; i < len; ++i)
                             {
-                                rightP += goals[i](rightPos);
+                                rightP += FiniteGoal(goals[i], rightPos);
                             }
 
                             localScratch[baseIdx + x] = Math.Min(leftP, rightP);
@@ -537,7 +599,7 @@ public struct NavigationDecision
                             var isSafe = pixelMaxG[idx] == float.MaxValue;
                             for (var i = 0; i < len; ++i)
                             {
-                                if (goals[i](cellCenter) > 0f)
+                                if (FiniteGoal(goals[i], cellCenter) > 0f)
                                 {
                                     ++localTotal[i];
                                     if (isSafe)
@@ -560,8 +622,8 @@ public struct NavigationDecision
                 // 合并各分区的局部统计与局部最大值
                 for (var i = 0; i < len; ++i)
                 {
-                    totalCounts[i] += acc.Total[i];
-                    safeCounts[i] += acc.Safe[i];
+                    Interlocked.Add(ref totalCounts[i], acc.Total[i]);
+                    Interlocked.Add(ref safeCounts[i], acc.Safe[i]);
                 }
                 float initVal, newVal;
                 do
@@ -569,7 +631,7 @@ public struct NavigationDecision
                     initVal = globalMaxPriority;
                     newVal = Math.Max(initVal, acc.LocalMax);
                 }
-                while (initVal != Interlocked.CompareExchange(ref globalMaxPriority, newVal, initVal));
+                while (!initVal.Equals(Interlocked.CompareExchange(ref globalMaxPriority, newVal, initVal)));
             });
 
         map.MaxPriority = globalMaxPriority;
@@ -613,7 +675,7 @@ public struct NavigationDecision
                         var coveredByAbandoned = false;
                         for (var i = 0; i < len; ++i)
                         {
-                            if (abandoned[i] && goals[i](cellCenter) > 0f)
+                            if (abandoned[i] && FiniteGoal(goals[i], cellCenter) > 0f)
                             {
                                 coveredByAbandoned = true;
                                 break;
@@ -638,10 +700,10 @@ public struct NavigationDecision
                                 {
                                     continue;
                                 }
-                                tlP += goals[i](tl);
-                                trP += goals[i](tr);
-                                blP += goals[i](bl);
-                                brP += goals[i](br);
+                                tlP += FiniteGoal(goals[i], tl);
+                                trP += FiniteGoal(goals[i], tr);
+                                blP += FiniteGoal(goals[i], bl);
+                                brP += FiniteGoal(goals[i], br);
                             }
                             cellP = Math.Min(Math.Min(tlP, trP), Math.Min(blP, brP));
                             pixelPriority[idx] = cellP;
@@ -667,10 +729,16 @@ public struct NavigationDecision
                     initVal = newGlobalMax;
                     newVal = Math.Max(initVal, localMax);
                 }
-                while (initVal != Interlocked.CompareExchange(ref newGlobalMax, newVal, initVal));
+                while (!initVal.Equals(Interlocked.CompareExchange(ref newGlobalMax, newVal, initVal)));
             });
 
         map.MaxPriority = newGlobalMax;
+    }
+
+    private static float FiniteGoal(Func<WPos, float> goal, WPos pos)
+    {
+        var value = goal(pos);
+        return float.IsFinite(value) ? value : 0;
     }
 
     public static void RasterizeVoidzones(Map map, ShapeDistance[] zones)

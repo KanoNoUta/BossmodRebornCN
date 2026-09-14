@@ -1,4 +1,4 @@
-using Dalamud.Bindings.ImGui;
+using Dalamud.Game.ClientState.Keys;
 using Dalamud.Game.Config;
 using Dalamud.Plugin;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
@@ -39,7 +39,6 @@ public sealed unsafe class MovementOverride : IDisposable
     private readonly ActionTweaksConfig _tweaksConfig = Service.Config.Get<ActionTweaksConfig>();
     private bool? _forcedControlState;
     public bool LegacyMode;
-    private bool[]? _navmeshPathIsRunning;
     public static MovementOverride? Instance;
 
     public bool IsMoving() => ActualMove != default;
@@ -47,9 +46,11 @@ public sealed unsafe class MovementOverride : IDisposable
 
     public bool IsForceUnblocked() => _tweaksConfig.MoveEscapeHatch switch
     {
-        ActionTweaksConfig.ModifierKey.Ctrl => ImGui.GetIO().KeyCtrl,
-        ActionTweaksConfig.ModifierKey.Alt => ImGui.GetIO().KeyAlt,
-        ActionTweaksConfig.ModifierKey.Shift => ImGui.GetIO().KeyShift,
+        // Movement hooks and framework updates also run without an ImGui frame.
+        // Read the game's keyboard state, not the last rendered UI frame.
+        ActionTweaksConfig.ModifierKey.Ctrl => Service.KeyState[VirtualKey.CONTROL] || Service.KeyState[VirtualKey.LCONTROL] || Service.KeyState[VirtualKey.RCONTROL],
+        ActionTweaksConfig.ModifierKey.Alt => Service.KeyState[VirtualKey.MENU] || Service.KeyState[VirtualKey.LMENU] || Service.KeyState[VirtualKey.RMENU],
+        ActionTweaksConfig.ModifierKey.Shift => Service.KeyState[VirtualKey.SHIFT] || Service.KeyState[VirtualKey.LSHIFT] || Service.KeyState[VirtualKey.RSHIFT],
         ActionTweaksConfig.ModifierKey.M12 => UIInputData.Instance()->UIFilteredCursorInputs.MouseButtonHeldFlags.HasFlag(MouseButtonFlags.LBUTTON | MouseButtonFlags.RBUTTON),
         _ => false,
     };
@@ -97,7 +98,6 @@ public sealed unsafe class MovementOverride : IDisposable
 
     public void Dispose()
     {
-        _dalamud.RelinquishData("vnav.PathIsRunning");
         Service.GameConfig.UiControlChanged -= OnConfigChanged;
         MovementBlocked = false;
         _mcIsInputActiveHook.Dispose();
@@ -106,14 +106,27 @@ public sealed unsafe class MovementOverride : IDisposable
         Instance = null;
     }
 
+    // Only the game session lifecycle suspends these hooks.
+    public void SetGameplayEnabled(bool enabled)
+    {
+        if (!enabled)
+        {
+            DesiredDirection = null;
+            DesiredSpinDirection = null;
+            MovementBlocked = false;
+            _forcedControlState = null;
+        }
+        _rmiWalkHook.Enabled = _rmiFlyHook.Enabled = _mcIsInputActiveHook.Enabled = enabled;
+    }
+
     public bool FollowPathActive()
     {
-        if (_navmeshPathIsRunning == null && _dalamud.TryGetData<bool[]>("vnav.PathIsRunning", out var data))
-        {
-            _navmeshPathIsRunning = data;
-        }
-
-        return _navmeshPathIsRunning != null && _navmeshPathIsRunning[0];
+        // Each successful TryGetData acquires a DataShare reference. Release it
+        // immediately so BMR cannot keep an unloaded vnav's stale true alive.
+        if (!_dalamud.TryGetData<bool[]>("vnav.PathIsRunning", out var data))
+            return false;
+        try { return data is { Length: > 0 } && data[0]; }
+        finally { _dalamud.RelinquishData("vnav.PathIsRunning"); }
     }
 
     private void RMIWalkDetour(MoveControllerSubMemberForMine* self, float* sumLeft, float* sumForward, float* sumTurnLeft, byte* haveBackwardOrStrafe, byte* a6, byte bAdditiveUnk)
