@@ -74,6 +74,12 @@ sealed class CrucibleGargoyleInOut(BossModule module) : Components.GenericAOEs(m
         Update();
         if (_steel is { } steel)
         {
+            // Match the visible countdown, excluding the NPC finish delay and 48719's 0.6s hit delay.
+            var castFinish = Module.PrimaryActor.CastInfo is { Action.ID: 48719 } cast
+                ? WorldState.FutureTime(cast.RemainingTime)
+                : steel.Activation.AddSeconds(-ActorCastInfo.NPCFinishDelay);
+            if (castFinish > WorldState.FutureTime(3))
+                return;
             hints.AddForbiddenZone(new SDCircle(steel.Origin, 13.25f), steel.Activation.AddSeconds(-0.5));
             if (_ring is { } next)
             {
