@@ -69,46 +69,71 @@ sealed class CrucibleLaudaBlades(BossModule module) : Components.GenericAOEs(mod
     public override void OnActorDeath(Actor actor) => OnActorDestroyed(actor);
 }
 
-// Knockback row 234: 20y to source-right, confirmed by the recorded northward landing.
-// Its 80x80 hit is unavoidable: constrain the landing instead of forbidding the whole floor.
-sealed class CrucibleLaudaTorrent(BossModule module)
-    : Components.SimpleKnockbacks(module, 49453u, 20, shape: new AOEShapeRect(80, 40), kind: Kind.DirRight)
+// Both recorded casts use the same origin/rotation. Row 234 pushes the north
+// half north and row 235 pushes the south half south: split away from the cast's
+// center line, not a fixed source-right knockback for every player.
+sealed class CrucibleLaudaTorrent(BossModule module) : Components.GenericKnockback(module, 49453u)
 {
-    public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor)
+    private DateTime _activation;
+    private ulong _caster;
+    private Angle _rotation;
+    private readonly Knockback[] _source = new Knockback[1];
+
+    private WDir Displacement(WPos position)
     {
-        Casters.RemoveAll(k => k.Activation.AddSeconds(2) < WorldState.CurrentTime);
-        return base.ActiveKnockbacks(slot, actor);
+        var normal = _rotation.ToDirection().OrthoR();
+        return normal * ((position - Module.Center).Dot(normal) >= 0 ? 20 : -20);
     }
 
-    public override bool DestinationUnsafe(int slot, Actor actor, WPos pos)
-        => !CrucibleLaudaFloor.Contains(pos);
+    public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor)
+    {
+        if (_activation == default || _activation.AddSeconds(1) < WorldState.CurrentTime)
+            return [];
+        _source[0] = new(Module.Center, 20, _activation, direction: Angle.FromDirection(Displacement(actor.Position)), kind: Kind.DirForward);
+        return _source;
+    }
+
+    public override bool DestinationUnsafe(int slot, Actor actor, WPos pos) => !CrucibleLaudaFloor.Contains(pos);
+
+    private sealed class LandingZone(CrucibleLaudaTorrent component) : ShapeDistance
+    {
+        public override float Distance(in WPos p) => CrucibleLaudaFloor.SafeTravel(p, component.Displacement(p)) ? 1 : -1;
+    }
 
     public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
     {
-        foreach (var k in ActiveKnockbacks(slot, actor))
-            if (!IsImmune(slot, k.Activation))
-            {
-                var displacement = (k.Direction - 90f.Degrees()).ToDirection() * k.Distance;
-                hints.AddForbiddenZone(new CrucibleLaudaFloor.LandingZone(displacement), k.Activation.AddSeconds(-0.5));
-            }
+        if (ActiveKnockbacks(slot, actor).Length != 0 && !IsImmune(slot, _activation))
+        {
+            hints.AddForbiddenZone(new LandingZone(this), _activation.AddSeconds(-0.5));
+            // After the 40y shockwave, leave the tip and return close to the midline.
+            hints.GoalZones.Add(p => Math.Max(0, 10 - Math.Abs((p - Module.Center).Dot(_rotation.ToDirection().OrthoR()))));
+        }
     }
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
-        if (spell.Action.ID != WatchedAction || spell.EventHappened || Module.CastFinishAt(spell) <= WorldState.CurrentTime)
-            return;
-        Casters.RemoveAll(k => k.ActorID == caster.InstanceID);
-        base.OnCastStarted(caster, spell);
+        if (spell.Action.ID == WatchedAction && !spell.EventHappened && Module.CastFinishAt(spell) > WorldState.CurrentTime)
+        {
+            _activation = Module.CastFinishAt(spell);
+            _rotation = spell.Rotation;
+            _caster = caster.InstanceID;
+        }
     }
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell)
     {
         if (spell.Action.ID == WatchedAction)
-            Casters.RemoveAll(k => k.ActorID == caster.InstanceID);
-        base.OnEventCast(caster, spell);
+        {
+            _activation = default;
+            ++NumCasts;
+        }
     }
 
-    public override void OnActorDestroyed(Actor actor) => Casters.RemoveAll(k => k.ActorID == actor.InstanceID);
+    public override void OnActorDestroyed(Actor actor)
+    {
+        if (actor.InstanceID == _caster)
+            _activation = default;
+    }
     public override void OnActorDeath(Actor actor) => OnActorDestroyed(actor);
 }
 
@@ -137,15 +162,26 @@ sealed class CrucibleLaudaThunder(BossModule module) : Components.BaitAwayCast(m
 // Use baits while aiming and the actual helper cast once locked.
 sealed class CrucibleLaudaBaits(BossModule module) : Components.GenericBaitAway(module)
 {
-    private static readonly WPos BaitPoint = new(520, -398);
+    private WPos? _baitPoint;
+    private DateTime _lockAt, _prepareUntil;
+    private bool _moving;
+    public bool Preparing => _prepareUntil > WorldState.CurrentTime || CurrentBaits.Count > 0;
 
     public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
     {
         base.AddAIHints(slot, actor, assignment, hints);
-        if (!IsBaitTarget(actor))
+        if (!Preparing || (CurrentBaits.Count > 0 && !IsBaitTarget(actor)))
             return;
-        hints.GoalZones.Add(p => p.InCircle(BaitPoint, 1) ? 100 : 0);
-        hints.AddForbiddenZone(new SDInvertedCircle(BaitPoint, 1.2f), CurrentBaits.Min(b => b.Activation).AddSeconds(-0.7));
+        // Choose once per wave. Only the two axial tips avoid the side statues.
+        _baitPoint ??= Module.Center + new WDir(0, actor.Position.Z < Module.Center.Z ? -22.5f : 22.5f);
+        var point = _baitPoint.Value;
+        // Keep attacking until the remaining walk plus navigation/latency margin
+        // requires leaving. Once we depart, hold the chosen tip until helpers lock.
+        _moving |= WorldState.FutureTime((actor.Position - point).Length() / 6 + 1) >= _lockAt;
+        if (!_moving)
+            return;
+        hints.GoalZones.Add(p => Math.Max(0, 100 - (p - point).Length() * 2));
+        hints.AddForbiddenZone(new SDInvertedCircle(point, 0.9f), _lockAt);
         hints.MaxCastTime = 0;
     }
 
@@ -153,6 +189,15 @@ sealed class CrucibleLaudaBaits(BossModule module) : Components.GenericBaitAway(
     {
         if (tether.ID != 1 || source.OID is not (19742 or 19747) || WorldState.Actors.Find(tether.Target) is not { } target)
             return;
+        if (CurrentBaits.Count == 0)
+        {
+            if (_prepareUntil <= WorldState.CurrentTime)
+            {
+                _baitPoint = null;
+                _moving = false;
+            }
+            _lockAt = WorldState.FutureTime(4.5); // aim locks at +5.1s; reserve latency
+        }
         CurrentBaits.RemoveAll(b => b.Source == source);
         CurrentBaits.Add(new(source, target, new AOEShapeRect(60, 3), WorldState.FutureTime(7.1)));
     }
@@ -161,8 +206,26 @@ sealed class CrucibleLaudaBaits(BossModule module) : Components.GenericBaitAway(
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
-        if (spell.Action.ID is 49464 or 50848)
-            CurrentBaits.RemoveAll(b => b.Source.Position.AlmostEqual(caster.Position, 0.5f));
+        if (spell.Action.ID == 49462 && !spell.EventHappened)
+        {
+            _baitPoint = null;
+            _moving = false;
+            _prepareUntil = WorldState.FutureTime(16);
+            // ARR: summon -> tethers ~9.6s -> aimed helpers ~5.1s later.
+            _lockAt = WorldState.FutureTime(14);
+        }
+        else if (spell.Action.ID == 50846 && !spell.EventHappened && Module.CastFinishAt(spell) > WorldState.CurrentTime)
+        {
+            // The boss's aiming cast gives the actual deadline; its later
+            // 50848 damage cast is already fixed and must be dodged.
+            _lockAt = Module.CastFinishAt(spell, -0.5f);
+            _prepareUntil = Module.CastFinishAt(spell, 3);
+        }
+        else if (spell.Action.ID is 49464 or 50848)
+        {
+            _prepareUntil = default;
+            CurrentBaits.RemoveAll(b => b.Source.Position.AlmostEqual(spell.LocXZ, 0.5f));
+        }
     }
 
     public override void Update() => CurrentBaits.RemoveAll(b => b.Source.IsDeadOrDestroyed || b.Target.IsDeadOrDestroyed || b.Activation.AddSeconds(1) < WorldState.CurrentTime);
@@ -170,11 +233,18 @@ sealed class CrucibleLaudaBaits(BossModule module) : Components.GenericBaitAway(
     public override void AddHints(int slot, Actor actor, TextHints hints)
     {
         base.AddHints(slot, actor, hints);
-        if (IsBaitTarget(actor))
-            hints.Add("三剑引导到南侧中央凸台，锁定后躲开，避免击中石像！", false);
+        if (Preparing)
+            hints.Add(_moving ? "三剑：到上下中央凸台保持引导，锁线读条结束后躲开，避免打中石像！" : "三剑：可继续攻击，锁线读条结束前到上下中央凸台！", false);
+    }
+
+    public override void DrawArenaForeground(int pcSlot, Actor pc)
+    {
+        base.DrawArenaForeground(pcSlot, pc);
+        if (Preparing && _baitPoint is { } point)
+            new AOEShapeCircle(0.9f).Outline(Arena, point, default, Colors.Safe);
     }
 }
 
-sealed class CrucibleLaudaLaterHint(BossModule module) : Components.CastHints(module, [49473u, 49477u], "后续战斧：Boss落地朝Boss方向击退，跳起朝对侧击退，注意电网！");
+sealed class CrucibleLaudaLaterHint(BossModule module) : Components.CastHints(module, [49477u], "灼焰战斧：持续全屏伤害，准备减伤与治疗！");
 
 sealed class CrucibleLaudaAddRaidwide(BossModule module) : Components.CastHints(module, [50541u], "地狱之痛：全屏伤害，准备减伤！");

@@ -1021,6 +1021,7 @@ sealed class XBMB45States : RecordedCrucibleStates
             .ActivateOnEnter<CrucibleLaudaFireKnife>()
             .ActivateOnEnter<CrucibleLaudaShockwave>()
             .ActivateOnEnter<CrucibleLaudaLaterHint>()
+            .ActivateOnEnter<CrucibleLaudaEmpoweredBlades>()
             .ActivateOnEnter<CrucibleLaudaAddRaidwide>()
             ;
     }
@@ -1167,6 +1168,7 @@ sealed class XBMB33States : RecordedCrucibleStates
     {
         GroupPhase()
             .ActivateOnEnter<XBMB33AOE>()
+            .ActivateOnEnter<CrucibleMindflayerAdds>()
             .ActivateOnEnter<CrucibleFungalBeds>()
             .ActivateOnEnter<CrucibleMindflayerWater>()
             .ActivateOnEnter<CrucibleMindflayerThunder>()
@@ -1232,7 +1234,6 @@ sealed class XBMB38States : RecordedCrucibleStates
     {
         GroupPhase()
             .ActivateOnEnter<XBMB38AOE>()
-            .ActivateOnEnter<CrucibleMedusaAdds>()
             .ActivateOnEnter<CrucibleMedusaRay>()
             .ActivateOnEnter<XBMB38Hint0>()
             ;
@@ -1286,12 +1287,15 @@ public sealed class XBMB42(WorldState ws, Actor primary) : CrucibleModule(ws, pr
 
 // 第 40 组（斗兽奇弈高段 第二盘）：奇子·斯芬克斯
 [SkipLocalsInit]
-sealed class XBMB40States : StateMachineBuilder
+sealed class XBMB40States : RecordedCrucibleStates
 {
     public XBMB40States(BossModule module) : base(module)
     {
-        TrivialPhase()
+        GroupPhase()
             .ActivateOnEnter<XBMB40AOE>()
+            .ActivateOnEnter<CrucibleSphinxRiddles>()
+            .ActivateOnEnter<CrucibleSphinxNumbers>()
+            .ActivateOnEnter<CrucibleSphinxRaidwide>()
             ;
     }
 }
@@ -1309,7 +1313,7 @@ sealed class XBMB40States : StateMachineBuilder
     NameID = 14665u, // 奇子·斯芬克斯
     SortOrder = 40)]
 [SkipLocalsInit]
-public sealed class XBMB40(WorldState ws, Actor primary) : CrucibleModule(ws, primary, 14665u);
+public sealed class XBMB40(WorldState ws, Actor primary) : RecordedCrucibleModule(ws, primary, 14665u);
 
 // 第 43 组（斗兽奇弈高段 第二盘）：奇子·贝希摩斯 + 奇子·铁巨人[14685], 雷元精[14686]
 [SkipLocalsInit]
@@ -1340,14 +1344,17 @@ public sealed class XBMB43(WorldState ws, Actor primary) : CrucibleModule(ws, pr
 
 // 第 44 组（斗兽奇弈高段 第二盘）：奇子·冥鬼之眼王 + 奇子·哈帕利特[14691], 奇子·肮脏之眼[14692]
 [SkipLocalsInit]
-sealed class XBMB44States : StateMachineBuilder
+sealed class XBMB44States : RecordedCrucibleStates
 {
     public XBMB44States(BossModule module) : base(module)
     {
-        TrivialPhase()
+        GroupPhase()
             .ActivateOnEnter<XBMB44AOE>()
-            .ActivateOnEnter<XBMB44Hint0>()
-            .ActivateOnEnter<XBMB44Hint1>()
+            .ActivateOnEnter<CrucibleEyeAttract>()
+            .ActivateOnEnter<CrucibleEyeRoulette>()
+            .ActivateOnEnter<CrucibleEyeGazes>()
+            .ActivateOnEnter<CrucibleEyeBrands>()
+            .ActivateOnEnter<CrucibleEyeRaidwide>()
             ;
     }
 }
@@ -1365,4 +1372,4 @@ sealed class XBMB44States : StateMachineBuilder
     NameID = 14688u, // 奇子·冥鬼之眼王
     SortOrder = 44)]
 [SkipLocalsInit]
-public sealed class XBMB44(WorldState ws, Actor primary) : CrucibleModule(ws, primary, 14688u);
+public sealed class XBMB44(WorldState ws, Actor primary) : RecordedCrucibleModule(ws, primary, 14688u);

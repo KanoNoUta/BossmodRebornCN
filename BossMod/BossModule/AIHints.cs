@@ -106,6 +106,8 @@ public sealed class AIHints
     // this should be set only if either explicitly planned by user or by ai, otherwise it will be annoying to user
     public Actor? ForcedTarget;
     public Actor? ForcedFocusTarget;
+    // Explicitly drop this unsafe selected target; null ForcedTarget means "leave unchanged".
+    public ulong ClearTargetID;
 
     // low-level forced movement - if set, character will move in specified direction (ignoring casts, uptime, forbidden zones, etc), or stay in place if set to default
     public Vector3? ForcedMovement;
@@ -152,6 +154,10 @@ public sealed class AIHints
     // （NaviTargetPos=null + ForceCancelCast），组件配合设置 hints.ForceCancelCast 打断读条
     public bool ForcedMarchImminent;
 
+    // Only a component explicitly requesting facing + movement/cast lock can
+    // override an action's facing. Expiry and Clear() release it automatically.
+    public Angle? LockedFacing(DateTime now) => ForcedMarchImminent && ForceCancelCast && DesiredFacingExpire > now ? DesiredFacing : null;
+
     // closest special movement/targeting/action mode, if any
     // activation = when the restriction starts (e.g. bomb detonation), finish = when the restriction ends (e.g. pyretic expires)
     public (SpecialMode mode, DateTime activation, DateTime finish) ImminentSpecialMode;
@@ -193,6 +199,7 @@ public sealed class AIHints
         PotentialTargets.Clear();
         ForcedTarget = null;
         ForcedFocusTarget = null;
+        ClearTargetID = 0;
         ForcedMovement = null;
         SpinDirection = null;
         InteractWithTarget = null;

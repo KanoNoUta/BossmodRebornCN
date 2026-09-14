@@ -73,6 +73,13 @@ sealed class CrucibleLaudaShockwave(BossModule module) : Components.GenericKnock
 
     public override bool DestinationUnsafe(int slot, Actor actor, WPos pos) => !CrucibleLaudaFloor.Contains(pos);
 
+    // Navigation cannot represent a future teleport across an AOE. Keep the
+    // later pattern on the overlay and assess it at the landing instead.
+    public bool ResolvesAfterJump(Actor actor, DateTime activation) => _marks.TryGetValue(actor.InstanceID, out var mark)
+        && mark.Activation != default && mark.Forward != null
+        && activation > mark.Activation.AddSeconds(0.5) && activation <= mark.Activation.AddSeconds(4);
+
+
     public override void AddHints(int slot, Actor actor, TextHints hints)
     {
         if (_marks.TryGetValue(actor.InstanceID, out var mark))
@@ -107,22 +114,31 @@ sealed class CrucibleLaudaShockwave(BossModule module) : Components.GenericKnock
             var end = Module.Center - new WDir(0, side * 22);
             float penalty = 0;
             foreach (var zone in hints.ForbiddenZones)
-                if (zone.activation >= mark.Activation.AddSeconds(-0.5) && zone.activation <= mark.Activation.AddSeconds(3)
+                if (zone.activation >= mark.Activation.AddSeconds(-0.5) && zone.activation <= mark.Activation.AddSeconds(4)
                     && zone.shapeDistance.Distance(end) <= 0)
                     penalty += 10000;
+            if (Module.FindComponent<XBMB45AOE>() is { } aoes)
+                foreach (var aoe in aoes.ActiveAOEs(slot, actor))
+                    if (ResolvesAfterJump(actor, aoe.Activation) && aoe.Shape.Check(end, aoe.Origin, aoe.Rotation))
+                        penalty += 10000;
             return penalty + (actor.Position - start).LengthSq() + (mark.Side == side ? -100 : 0);
         }
         mark.Side = Score(1) < Score(-1) ? 1 : -1;
         var goal = Module.Center + new WDir(0, mark.Side * 18);
-        hints.GoalZones.Add(p => p.InCircle(goal, 0.8f) ? 100 : 0);
-        hints.AddForbiddenZone(new SDInvertedCircle(goal, 1), mark.Activation.AddSeconds(-0.7));
-        hints.MaxCastTime = 0;
+        var facing = new WDir(0, -mark.Side * (forward ? 1 : -1));
         var remaining = (mark.Activation - WorldState.CurrentTime).TotalSeconds;
-        if (remaining < 1.2 && actor.Position.InCircle(goal, 1.2f))
+        // Approach the final point along the required facing. A short real step
+        // also updates the server's movement/facing snapshot before standing still.
+        var waypoint = remaining > 4.5 ? goal - facing * 1.5f : goal;
+        hints.GoalZones.Add(p => Math.Max(0, 100 - (p - waypoint).Length() * 2));
+        hints.AddForbiddenZone(new SDInvertedCircle(waypoint, 0.6f), mark.Activation.AddSeconds(remaining > 4.5 ? -5 : -3.5));
+        hints.MaxCastTime = 0;
+        if (remaining < 3.0 && actor.Position.InCircle(goal, 0.8f))
         {
-            // ACR auto-facing must not turn the final player-relative knockback sideways.
-            hints.DesiredFacing = Angle.FromDirection(new WDir(0, -mark.Side * (forward ? 1 : -1)));
-            hints.DesiredFacingExpire = mark.Activation.AddSeconds(0.3);
+            // ARR used the pre-turn server facing when turning only 1.2s before expiry.
+            // Establish it earlier and keep automatic actions from changing it.
+            hints.DesiredFacing = Angle.FromDirection(facing);
+            hints.DesiredFacingExpire = mark.Activation.AddSeconds(0.5);
             hints.ForcedMarchImminent = true;
             hints.ForceCancelCast = true;
         }
@@ -188,7 +204,7 @@ sealed class CrucibleLaudaFireKnife(BossModule module) : BossComponent(module)
 
     public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
     {
-        if (_drop is { } drop && _target == actor.InstanceID)
+        if (_drop is { } drop && _target == actor.InstanceID && Module.FindComponent<CrucibleLaudaBaits>()?.Preparing != true)
         {
             hints.GoalZones.Add(p => p.InCircle(drop, 1) ? 50 : 0);
             hints.MaxCastTime = 0;
@@ -200,14 +216,16 @@ sealed class CrucibleLaudaFireKnife(BossModule module) : BossComponent(module)
     public override void AddHints(int slot, Actor actor, TextHints hints)
     {
         if (_drop != null && _target == actor.InstanceID)
-            hints.Add("飞刀点名：放到侧面安全凸台！", false);
+            hints.Add(Module.FindComponent<CrucibleLaudaBaits>()?.Preparing == true
+                ? "飞刀与剑线重叠：保持上下中央凸台，剑线锁定后躲开！"
+                : "飞刀点名：放到侧面安全凸台！", false);
         if (_explosion != null)
             hints.Add("魔刃核爆：远离飞刀，注意同时处理止步击退！", false);
     }
 
     public override void DrawArenaForeground(int pcSlot, Actor pc)
     {
-        if (_drop is { } drop && _target == pc.InstanceID)
+        if (_drop is { } drop && _target == pc.InstanceID && Module.FindComponent<CrucibleLaudaBaits>()?.Preparing != true)
             new AOEShapeCircle(1).Outline(Arena, drop, default, Colors.Safe);
         if (_explosion is { } explosion)
             new AOEShapeCircle(6).Outline(Arena, explosion, default, Colors.Danger);

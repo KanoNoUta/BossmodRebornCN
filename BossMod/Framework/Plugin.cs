@@ -433,6 +433,8 @@ public sealed class Plugin : IAsyncDalamudPlugin
 
         var targetSystem = FFXIVClientStructs.FFXIV.Client.Game.Control.TargetSystem.Instance();
         SetTarget(_hints.ForcedTarget, &targetSystem->Target);
+        if (_hints.ClearTargetID != 0 && targetSystem->Target != null && targetSystem->Target->EntityId == _hints.ClearTargetID)
+            targetSystem->Target = null;
         SetTarget(_hints.ForcedFocusTarget, &targetSystem->FocusTarget);
 
         foreach (var s in _hints.StatusesToCancel)

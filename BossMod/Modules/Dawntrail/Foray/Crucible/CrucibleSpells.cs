@@ -487,7 +487,7 @@ sealed class XBMB39AOE(BossModule module) : High2CrucibleCastAOEs(module, Battle
 
 // 第 40 组（斗兽奇弈高段 第二盘）
 [SkipLocalsInit]
-sealed class XBMB40AOE(BossModule module) : CrucibleCastAOEs(module, Battle.B40);
+sealed class XBMB40AOE(BossModule module) : High2CrucibleCastAOEs(module, Battle.B40);
 
 // 第 41 组（斗兽奇弈高段 第二盘）
 [SkipLocalsInit]
@@ -503,7 +503,7 @@ sealed class XBMB43AOE(BossModule module) : CrucibleCastAOEs(module, Battle.B43)
 
 // 第 44 组（斗兽奇弈高段 第二盘）
 [SkipLocalsInit]
-sealed class XBMB44AOE(BossModule module) : CrucibleCastAOEs(module, Battle.B44);
+sealed class XBMB44AOE(BossModule module) : High2CrucibleCastAOEs(module, Battle.B44);
 
 // 第 45 组（斗兽奇弈高段 第二盘）
 [SkipLocalsInit]

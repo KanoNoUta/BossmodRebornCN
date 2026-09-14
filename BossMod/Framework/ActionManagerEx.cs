@@ -424,6 +424,9 @@ public sealed unsafe class ActionManagerEx : IDisposable
 
     private Angle? CalculateDesiredOrientation(bool actionImminent)
     {
+        if (_hints.LockedFacing(_ws.CurrentTime) is { } locked)
+            return _smartRotationTweak.GetSafeRotation(locked, null, default) ?? locked;
+
         if (actionImminent && AutoQueue.FacingAngle != null)
         {
             return AutoQueue.FacingAngle; // explicit angle overrides all other concerns
@@ -496,7 +499,7 @@ public sealed unsafe class ActionManagerEx : IDisposable
         blockMovement |= Config.PyreticThreshold > 0 && _hints.ImminentSpecialMode.mode is AIHints.SpecialMode.Pyretic or AIHints.SpecialMode.NoMovement && _hints.ImminentSpecialMode.activation < _ws.FutureTime(Config.PyreticThreshold);
 
         // note: if we cancel movement and start casting immediately, it will be canceled some time later - instead prefer to delay for one frame
-        var actionImminent = EffectiveAnimationLock <= 0 && AutoQueue.Action && !IsRecastTimerActive(AutoQueue.Action) && !(blockMovement && _movement.IsMoving());
+        var actionImminent = _hints.LockedFacing(_ws.CurrentTime) == null && EffectiveAnimationLock <= 0 && AutoQueue.Action && !IsRecastTimerActive(AutoQueue.Action) && !(blockMovement && _movement.IsMoving());
         var desiredRotation = CalculateDesiredOrientation(actionImminent);
 
         // execute rotation, if needed

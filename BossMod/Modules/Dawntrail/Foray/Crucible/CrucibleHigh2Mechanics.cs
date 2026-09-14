@@ -1,5 +1,30 @@
 namespace BossMod.Dawntrail.Foray.Crucible;
 
+// The mindflayer's toxic mushrooms are the intended target only once a water
+// bait can actually hit them. Until a mushroom is inside the active water
+// circle, preserve the current target so the bait setup does not waste uptime.
+sealed class CrucibleMindflayerAdds(BossModule module) : BossComponent(module)
+{
+    private static bool IsLiving(Actor a) => a.OID == 19678u && !a.IsDeadOrDestroyed && a.IsTargetable && a.HPMP.CurHP > 0;
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        var adds = WorldState.Actors.Where(IsLiving).OrderBy(a => a.InstanceID).ToArray();
+        var water = Module.FindComponent<CrucibleMindflayerWater>();
+        var hittable = water?.IsBaitTarget(actor) == true
+            ? adds.Where(a => a.Position.InCircle(actor.Position, 7.5f)).ToArray()
+            : [];
+        foreach (var add in hittable)
+            hints.SetPriority(add, 10);
+        if ((hittable.FirstOrDefault(a => a.InstanceID == actor.TargetID) ?? hittable.FirstOrDefault()) is { } next)
+            hints.ForcedTarget = next;
+        // Retarget only an invalid selected mushroom. An unconditional fallback
+        // forces boss every frame and prevents all manual target changes.
+        else if (WorldState.Actors.Find(actor.TargetID) is { OID: 19678u } previous && !IsLiving(previous)
+            && Module.PrimaryActor.IsTargetable && !Module.PrimaryActor.IsDeadOrDestroyed)
+            hints.ForcedTarget = Module.PrimaryActor;
+    }
+}
+
 // High second board: ARR 2026-09-13 17:19:06 / 17:22:48 / 17:39:23.
 // Geometry checked against the installed CN Action/Omen sheets. In particular,
 // 49244 is visual, 49245 is a 5y ground circle, and 49247 is a 6y ground circle.
@@ -56,6 +81,10 @@ class High2CrucibleCastAOEs(BossModule module, Battle battle) : CriticalEngageme
         // Chimera breath helpers use x6d3_b1_fan240_p1: a 240-degree fan
         // (AOEShapeCone takes the half-angle).
         (Battle.B39, 49300 or 49302 or 49304 or 49327 or 49329 or 49331) => new(new AOEShapeCone(60, 120f.Degrees()), true),
+        // Sphinx: only the damage helpers carry the actual circle/donut/half-room rotation.
+        (Battle.B40, 49335) => new(new AOEShapeDonut(10, 60), true),
+        (Battle.B40, 49337) => new(new AOEShapeCircle(18), true),
+        (Battle.B40, 49339 or 49341) => new(new AOEShapeCone(60, 90f.Degrees()), true),
         // 22:48 ARR: the giant's front/back variants have distinct helper cast rotations.
         (Battle.B41, 49359) => new(new AOEShapeCircle(15), true),
         (Battle.B41, 49361 or 49363) => new(new AOEShapeCone(40, 90f.Degrees()), true),
@@ -86,6 +115,10 @@ class High2CrucibleCastAOEs(BossModule module, Battle battle) : CriticalEngageme
         {
             ref readonly var aoe = ref entry.AOE;
             if (!aoe.Risky)
+                continue;
+
+            if (battle == Battle.B45 && entry.ActionID is 49446 or 49449
+                && Module.FindComponent<CrucibleLaudaShockwave>()?.ResolvesAfterJump(actor, aoe.Activation) == true)
                 continue;
 
             if (entry.ActionID is 49315 or 49316)
@@ -199,7 +232,45 @@ abstract class High2CrucibleSpread(BossModule module, uint icon, uint action, fl
     }
 }
 
-sealed class CrucibleMindflayerWater(BossModule module) : High2CrucibleSpread(module, 135, 49200, 8, 5.9);
+sealed class CrucibleMindflayerWater(BossModule module) : High2CrucibleSpread(module, 135, 49200, 8, 5.9)
+{
+    public override void OnEventIcon(Actor actor, uint iconID, ulong targetID)
+    {
+        var target = WorldState.Actors.Find(targetID) ?? actor;
+        if (iconID == 135 && CurrentBaits.Any(b => b.Target == target && b.Activation.AddSeconds(1) > WorldState.CurrentTime))
+            return; // Duplicate packets must not extend the movement deadline.
+        base.OnEventIcon(actor, iconID, targetID);
+    }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        base.AddAIHints(slot, actor, assignment, hints);
+        if (!IsBaitTarget(actor))
+            return;
+
+        // ARR 17:45:55: the marked companion is replaced during the first
+        // water, and the second water has only a player icon but two hits.
+        // Never depend on having two live icon owners. Include the currently
+        // summoned companion, even after a swap or when its icon is missing.
+        // 18916/18931 are the two companion OIDs observed in this recording;
+        // OwnerID covers other owned companions without guessing an OID range.
+        var others = ActiveBaits.Where(b => b.Target != actor && !b.Target.IsDeadOrDestroyed).Select(b => b.Target)
+            .Concat(WorldState.Actors.Where(a => a != actor && !a.IsDeadOrDestroyed
+                && (a.OwnerID == actor.InstanceID || a.OID is 18916u or 18931u)))
+            .DistinctBy(a => a.InstanceID).Select(a => a.Position).ToArray();
+        if (others.Length == 0)
+            return;
+        var activation = CurrentBaits.First(b => b.Target == actor).Activation;
+        // Each target only needs to avoid the OTHER target's R8 splash.
+        // Do not separate the full circle footprints by 16y or force an edge
+        // destination: normal navigation can keep attacking from the nearest
+        // safe position, with 0.5y extra clearance for movement latency.
+        foreach (var other in others)
+            hints.AddForbiddenZone(new SDCircle(other, 8.5f), activation.AddSeconds(-0.5));
+        if (others.Any(o => actor.Position.InCircle(o, 8.5f)))
+            hints.MaxCastTime = 0;
+    }
+}
 sealed class CrucibleMindflayerThunder(BossModule module) : High2CrucibleSpread(module, 344, 49206, 6, 5.9)
 {
     public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
