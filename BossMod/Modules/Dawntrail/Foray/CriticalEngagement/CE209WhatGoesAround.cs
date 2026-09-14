@@ -80,6 +80,9 @@ sealed class WhatGoesAroundAOEs(BossModule module) : ReplayValidatedCastAOEs(mod
 // B84F is split across three helpers. The boss cast is the stable advance warning.
 sealed class DarkIV(BossModule module) : Components.RaidwideCast(module, (uint)AID.DarkIV);
 
+// 2026-08-03: the upstream ElectricBoundary class (ARR BFD0 deaths ~24.4y) was NOT restored -
+// CN in-game observation shows the instakill boundary is a 21y SQUARE (see the module below);
+// the 24.5y square + fence overlay only drew dead zone between the fence and the kill boundary.
 sealed class WhatGoesAroundStates : StateMachineBuilder
 {
     public WhatGoesAroundStates(BossModule module) : base(module)
@@ -102,6 +105,8 @@ sealed class WhatGoesAroundStates : StateMachineBuilder
     GroupID = 1093u,
     NameID = 57u,
     SortOrder = 8)]
-// The electric fence is square: arena-control kills cluster at |z| ~= 24 and players reach the
-// square rim, so use a 24.5y square instead of the old 20y circle that clipped the lane mechanics.
-public sealed class WhatGoesAround(WorldState ws, Actor primary) : BossModule(ws, primary, new(224f, -860f), new ArenaBoundsSquare(24.5f));
+// The instakill boundary is a square of 21y (confirmed by in-game observation; the kill zone is
+// square, not circular, center 224,-860).
+// 2026-08-07: arena bounds set to 20f (场地 20f，用户要求：删除场边即死区域，恢复简单方形).
+// 2026-08-16 场地半径 -0.3f：控制 AI 走位不贴紧即死边缘（方形场地半宽 20f→19.7f，整体收缩 0.3f）.
+public sealed class WhatGoesAround(WorldState ws, Actor primary) : BossModule(ws, primary, new(224f, -860f), new ArenaBoundsSquare(19.7f));

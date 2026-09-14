@@ -41,7 +41,7 @@ public enum AID : uint
     ShapeshiftingSupercellResolve = 0xBCE6,
     ShapeshiftingSupercellConeShort = 0xBCE7, // helper->self, 1.5s cast, range 60 90-degree cone
     ShapeshiftingSupercellCircle = 0xBCE8, // helper->self, 6.0s cast, range 8 circle
-    ShapeshiftingSupercellDonutInner = 0xBCE9, // helper->self, 6.0s cast, range 10-16 donut
+    ShapeshiftingSupercellDonutInner = 0xBCE9, // helper->self, 6.0s cast, range 10-20 donut
     ShapeshiftingSupercellDonutOuter = 0xBCEA, // helper->self, 6.0s cast, range 16-30 donut
     ShapeshiftingSupercellExtraCircle = 0xC64F, // helper->self, 6.0s cast, range 8 circle
     MadeMagicVisual = 0xBCEB, // boss->self, 4.0s cast, visual
@@ -59,15 +59,25 @@ public enum SID : uint
     AreaOfInfluenceUp = 1909 // Made Magic helper, extra 1-7; circle radius = extra * 2.5y
 }
 
-// The real arena is a 25y circle (player p99.9 radius 24.8, boundary hit at 24.6, charge targets at
-// 25), so mark the persistent electric fence with a thin ring at the edge instead of a 20-30 donut.
+// The official Action sheet (0xBCEF, eff=10 donut, xAxis=30) puts the persistent electric fence
+// outer kill ring at 30y; the walkable circle is 25y, so the danger band covers 25-30.
 sealed class LethalBoundary(BossModule module) : Components.GenericAOEs(module)
 {
-    private static readonly AOEShapeDonut Shape = new(24.5f, 25.5f);
+    private static readonly AOEShapeDonut Shape = new(24.5f, 30f);
     private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
+
+    public override void DrawArenaBackground(int pcSlot, Actor pc)
+    {
+        // The 24.5-30 donut gets clipped to the 25y walkable circle, leaving only a sliver that is
+        // effectively invisible. Draw a visible 24-25 band plus the fence outline so the kill ring
+        // reads clearly.
+        Arena.ZoneDonut(Arena.Center, 24f, 25f, Colors.Danger);
+        Arena.ZoneCircleOutlineUnclipped(Arena.Center, 25f, Colors.Danger, 3f);
+    }
 }
+
 
 // Every avoidable AOE below has an authoritative cast-start packet from the actor that owns the
 // shape. The helpers also carry their actual origin/rotation, so none of the patterns are inferred
@@ -80,7 +90,7 @@ sealed class MorphingMageAOEs(BossModule module) : ReplayValidatedCastAOEs(modul
     private static readonly AOEShapeDonut CyclonicRing = new(10f, 30f);
     private static readonly AOEShapeCone SupercellCone = new(60f, 45f.Degrees());
     private static readonly AOEShapeCircle SupercellCircle = new(8f);
-    private static readonly AOEShapeDonut SupercellInner = new(10f, 16f);
+    private static readonly AOEShapeDonut SupercellInner = new(10f, 20f);
     private static readonly AOEShapeDonut SupercellOuter = new(16f, 30f);
     private static readonly AOEShapeCross CycloneCross = new(60f, 8f);
 
@@ -104,15 +114,29 @@ sealed class MorphingMageAOEs(BossModule module) : ReplayValidatedCastAOEs(modul
     };
 }
 
-// Made Magic creates four fixed helpers 7.8y from center. They pulse every ~0.6s while status
-// 1909 grows from extra 1 through 7. The pulse is an expanding wave: actors already crossed by
-// an earlier pulse can stand inside the current radius without being hit again. Treating it as a
-// filled circle makes extra 7 falsely cover the entire arena, so only the next 2.5y ring is risky.
+// Made Magic creates four fixed helpers 7.8y from center (cardinal on one cast, diagonal on the
+// next). Status 1909 grows from extra 1 through 7; the whole circle out to extra*2.5y is dangerous
+// on every pulse (replay: a player standing 8-10y from a helper at extra 7 / 17.5y max was still
+// hit), so both the drawn warning and the AI forbidden zone must be a filled circle, not a thin
+// ring. The wave stops at extra 7 = 17.5y.
+//
+// The union of four 17.5y circles still leaves the four arena-edge pockets that sit >20y from every
+// helper (the exact spots survivors stand on), so the AI is parked in a pocket that is safe for the
+// whole sequence and never has to cross a circle - guaranteeing it is never clipped by the poison.
 sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
 {
+    private const float MaxRadius = 17.5f; // extra 7 * 2.5
+    private static readonly AOEShapeCircle FinalSweep = new(MaxRadius);
     private readonly Dictionary<ulong, AOEInstance> _pending = [];
+    private readonly Dictionary<ulong, int> _extra = [];
     private readonly List<AOEInstance> _displayed = new(4);
     private readonly HashSet<uint> _seenGlobalSequences = [];
+    private DateTime? _maxExtraAt;
+    private bool _mechanicFinished;
+    // extra 7 (max radius) holds for a couple seconds, then the mechanic is over and rings must
+    // not be rebuilt even though the helpers keep the growth status (that caused infinite
+    // clear->rebuild flicker).
+    private const double MaxExtraHold = 2d;
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
     {
@@ -121,14 +145,57 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
         return CollectionsMarshal.AsSpan(_displayed);
     }
 
+    // Reserve the complete sweep as soon as the first growth status arrives. Expanding this hint
+    // pulse-by-pulse makes automation walk a few yalms after every hit; the final 17.5y footprint
+    // sends it to one of the four edge pockets in a single route. ActiveAOEs still draws only the
+    // current real radius, so the visual timing remains faithful to the mechanic.
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        foreach (var aoe in _pending.Values)
+            hints.AddForbiddenZone(FinalSweep, aoe.Origin);
+    }
+
     public override void Update()
     {
-        // The four helpers can persist after the mechanic without a status-loss packet (replays and
-        // live packet loss both do this). If no pulse has refreshed a ring for a while, it is stale
-        // and must not remain drawn until the next mechanic.
+        // Components can be activated after the helpers already received their growth status.
+        // Recover that live state instead of waiting for a status-gain packet that will never repeat.
         var now = WorldState.CurrentTime;
-        foreach (var key in _pending.Keys.Where(key => now > _pending[key].Activation.AddSeconds(1.5d)).ToArray())
-            _pending.Remove(key);
+        var helpers = Module.Enemies((uint)OID.Helper).Where(h => !h.IsDeadOrDestroyed).ToList();
+        if (!_mechanicFinished)
+        {
+            foreach (var helper in helpers)
+            {
+                var status = helper.FindStatus((uint)SID.AreaOfInfluenceUp);
+                if (status is { } current && current.Extra is >= 1 and <= 7
+                    && (!_extra.TryGetValue(helper.InstanceID, out var knownExtra) || knownExtra != current.Extra))
+                {
+                    SetRing(helper, current.Extra);
+                    if (current.Extra == 7)
+                        _maxExtraAt = now;
+                }
+            }
+        }
+
+        // Stale helpers without the growth status (or destroyed without a clean packet) must not
+        // keep their rings drawn until the next mechanic.
+        var live = helpers.ToDictionary(h => h.InstanceID);
+        foreach (var key in _pending.Keys.ToArray())
+        {
+            if (!live.TryGetValue(key, out var helper) || helper.FindStatus((uint)SID.AreaOfInfluenceUp) == null)
+                Remove(key);
+        }
+
+        // Mechanic end: after every ring reached max radius (extra 7) and held it briefly, the
+        // sequence is over - clear all rings and refuse to rebuild them (helpers keep the growth
+        // status, which previously caused an infinite clear/rebuild loop).
+        if (!_mechanicFinished && _maxExtraAt is { } maxAt && now > maxAt.AddSeconds(MaxExtraHold) && _pending.Count != 0)
+        {
+            Service.Logger.Information($"[CE210] MadeMagic finished, clearing {_pending.Count} rings");
+            _pending.Clear();
+            _extra.Clear();
+            _mechanicFinished = true;
+            _maxExtraAt = null;
+        }
     }
 
     public override void OnStatusGain(Actor actor, ref ActorStatus status)
@@ -137,20 +204,43 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
             || status.ID != (uint)SID.AreaOfInfluenceUp || status.Extra is < 1 or > 7)
             return;
 
-        var outer = status.Extra * 2.5f;
-        AOEShape shape = status.Extra == 1 ? new AOEShapeCircle(outer) : new AOEShapeDonut(outer - 2.5f, outer);
-        _pending[actor.InstanceID] = new(shape, actor.Position, color: Colors.Danger, activation: WorldState.FutureTime(0.3f),
-            actorID: actor.InstanceID, shapeDistance: shape.Distance(actor.Position, default));
+        // After the mechanic finished, ignore stray gains until the status actually drops.
+        if (_mechanicFinished)
+            return;
+        // Repeated gain for the same extra (no lose in between) would rebuild the ring every frame
+        // and make it flicker; keep the existing ring instead.
+        if (_extra.TryGetValue(actor.InstanceID, out var known) && known == status.Extra)
+            return;
+        SetRing(actor, status.Extra);
+        if (status.Extra == 7)
+            _maxExtraAt = WorldState.CurrentTime;
+        Service.Logger.Information($"[CE210] MadeMagic status gain helper={actor.InstanceID:X} extra={status.Extra}");
+    }
+
+    private void SetRing(Actor actor, int extra)
+    {
+        var outer = extra * 2.5f;
+        // Whole circle is lethal (see comment above); AddAIHints additionally fills the circle so
+        // automation treats the swept area as forbidden, not just the currently drawn edge.
+        AOEShape shape = new AOEShapeCircle(outer);
+        _pending[actor.InstanceID] = new(shape, actor.Position, color: Colors.Danger, risky: false,
+            activation: WorldState.FutureTime(0.3f), actorID: actor.InstanceID, shapeDistance: shape.Distance(actor.Position, default));
+        _extra[actor.InstanceID] = extra;
+        Service.Logger.Information($"[CE210] MadeMagic ring helper={actor.InstanceID:X} extra={extra} r={outer:f1}");
     }
 
     public override void OnStatusLose(Actor actor, ref ActorStatus status)
     {
         if (status.ID == (uint)SID.AreaOfInfluenceUp)
-            _pending.Remove(actor.InstanceID);
+        {
+            Remove(actor.InstanceID);
+            _mechanicFinished = false;
+            _maxExtraAt = null;
+        }
     }
 
-    public override void OnActorDeath(Actor actor) => _pending.Remove(actor.InstanceID);
-    public override void OnActorDestroyed(Actor actor) => _pending.Remove(actor.InstanceID);
+    public override void OnActorDeath(Actor actor) => Remove(actor.InstanceID);
+    public override void OnActorDestroyed(Actor actor) => Remove(actor.InstanceID);
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell)
     {
@@ -159,10 +249,21 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
             || !_pending.TryGetValue(caster.InstanceID, out var current))
             return;
 
+        // Ignore pulses after the mechanic finished so a repeated/duplicated event cannot keep
+        // refreshing the rings forever.
+        if (_mechanicFinished)
+            return;
+
         // Every status step normally pulses twice (extra 7 pulses three times). The first event is
         // therefore not the end of the ring; move the same warning to the next observed cadence.
         // A new status replaces its geometry, and status loss performs the final cleanup.
         _pending[caster.InstanceID] = current with { Activation = WorldState.FutureTime(0.58d) };
+    }
+
+    private void Remove(ulong id)
+    {
+        _pending.Remove(id);
+        _extra.Remove(id);
     }
 }
 
@@ -170,67 +271,87 @@ sealed class MadeMagic(BossModule module) : Components.GenericAOEs(module)
 // stable, non-duplicated warning and starts one second before the helper cast bars.
 sealed class BlackenedRain(BossModule module) : Components.RaidwideCast(module, (uint)AID.BlackenedRainVisual);
 sealed class DarkDealing(BossModule module) : Components.SingleTargetDelayableCast(module, (uint)AID.DarkDealing);
-sealed class HellwardBound : Components.ChargeAOEs
-{
-    public HellwardBound(BossModule module) : base(module, (uint)AID.HellwardBound, 5f)
-    {
-        Color = Colors.Danger;
-    }
-}
-
-// The charge cast telegraphs only the first dash. After it resolves the boss dashes repeatedly
-// across the arena (replay: center -> SE corner -> west edge -> back east, each ~0.3s segment),
-// and those later segments carry damage too. Track the boss's fast movement and draw every dash
-// segment as a short-lived danger line so the whole multi-dash sequence is visible.
-sealed class ChargeDashes(BossModule module) : Components.GenericAOEs(module)
+// BCD7 only moves the boss from center to the cast location. The three damaging BCD8 dashes then
+// visit R90(p), -R90(p), and -p around arena center, where p is that first landing offset. Replays
+// expose the whole route from BCD7's target six seconds early, so draw the real lanes up front
+// instead of following the boss with post-hit movement trails.
+sealed class HellwardBound(BossModule module) : Components.GenericAOEs(module)
 {
     private const float HalfWidth = 5f;
-    private const float MinDashStep = 0.25f; // ~100y/s at 100Hz replay / ~1.7y per 60Hz frame; walks stay well below
-    private const double DashLifetime = 1.5d;
-    private readonly List<AOEInstance> _segments = [];
-    private readonly List<AOEInstance> _displayed = [with(32)];
-    private WPos _lastPosition;
-    private bool _hasLast;
+    private const double FirstDashDelay = 2.2d;
+    private const double DashInterval = 2.2d;
+    private const double FinalDashGrace = 0.9d;
+    private const double DisplayLead = 2d;
+    private readonly List<AOEInstance> _lanes = new(3);
+    private readonly HashSet<uint> _seenHitSequences = [];
+    private readonly AOEInstance[] _current = new AOEInstance[1];
+    private DateTime _phaseExpires;
+
+    public bool DashPhaseActive => WorldState.CurrentTime <= _phaseExpires;
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
     {
-        PruneExpired();
-        _displayed.Clear();
-        _displayed.AddRange(_segments);
-        return CollectionsMarshal.AsSpan(_displayed);
-    }
-
-    public override void Update()
-    {
-        var boss = Module.PrimaryActor;
-        if (boss.IsDeadOrDestroyed)
-        {
-            _segments.Clear();
-            _hasLast = false;
-            return;
-        }
-
+        // 纯时间驱动: 每段在其落地前 2s 显示 (risky), 落地后 0.5s 消失。不依赖 hit 事件,
+        // 避免 hit 时序不稳/缺失导致第二段显示太晚、AI 吃到伤害才躲。
+        if (WorldState.CurrentTime > _phaseExpires)
+            _lanes.Clear();
+        if (_lanes.Count == 0)
+            return [];
         var now = WorldState.CurrentTime;
-        if (_hasLast)
+        foreach (var lane in _lanes)
         {
-            var delta = boss.Position - _lastPosition;
-            if (delta.LengthSq() > MinDashStep * MinDashStep)
+            if (now >= lane.Activation.AddSeconds(-DisplayLead) && now <= lane.Activation.AddSeconds(0.5d))
             {
-                var rotation = Angle.FromDirection(delta);
-                var shape = new AOEShapeRect(delta.Length(), HalfWidth);
-                _segments.Add(new(shape, _lastPosition, rotation, now, Colors.Danger, true, boss.InstanceID,
-                    shapeDistance: shape.Distance(_lastPosition, rotation)));
+                _current[0] = new(lane.Shape, lane.Origin, lane.Rotation, lane.Activation, color: Colors.Danger, risky: true,
+                    shapeDistance: lane.ShapeDistance);
+                return _current;
             }
         }
-        _lastPosition = boss.Position;
-        _hasLast = true;
-        PruneExpired();
+        return [];
     }
 
-    private void PruneExpired()
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
-        var now = WorldState.CurrentTime;
-        _segments.RemoveAll(entry => now > entry.Activation.AddSeconds(DashLifetime));
+        // BCD7 is a non-damaging movement cast; it may arrive marked EventHappened, but we still
+        // need it to compute the dash lanes.
+        if (caster != Module.PrimaryActor || (spell.Action.ID & 0xFFFF) != (uint)AID.HellwardBound)
+            return;
+
+        Service.Logger.Information($"[CE210] HellwardBound cast id={spell.Action.ID:X} caster={caster.InstanceID:X} loc=({spell.LocXZ.X:f1},{spell.LocXZ.Z:f1})");
+        _lanes.Clear();
+        _seenHitSequences.Clear();
+
+        var p = spell.LocXZ - Arena.Center;
+        var p90 = p.OrthoL();
+        // The named four-part sequence starts with BCD7's non-damaging movement. Only the following
+        // three BCD8 paths are lethal; queuing center->p shifts every warning one hit late.
+        WPos[] points = [Arena.Center + p, Arena.Center + p90, Arena.Center - p90, Arena.Center - p];
+        var firstActivation = Module.CastFinishAt(spell).AddSeconds(FirstDashDelay);
+        for (var i = 0; i < 3; ++i)
+            AddLane(points[i], points[i + 1], firstActivation.AddSeconds(i * DashInterval), caster.InstanceID);
+        _phaseExpires = firstActivation.AddSeconds(2d * DashInterval + FinalDashGrace);
+        Service.Logger.Information($"[CE210] HellwardBound lanes={_lanes.Count} p=({p.X:f1},{p.Z:f1}) firstAct={firstActivation:O}");
+    }
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
+    {
+        if (caster != Module.PrimaryActor || (spell.Action.ID & 0xFFFF) != (uint)AID.HellwardBoundHit || !DashPhaseActive
+            || spell.GlobalSequence != 0 && !_seenHitSequences.Add(spell.GlobalSequence))
+            return;
+
+        Service.Logger.Information($"[CE210] HellwardBound hit id={spell.Action.ID:X} lanes={_lanes.Count} active={DashPhaseActive}");
+        if (_lanes.Count != 0)
+            _lanes.RemoveAt(0);
+        if (_lanes.Count == 0)
+            _phaseExpires = WorldState.FutureTime(FinalDashGrace);
+    }
+
+    private void AddLane(WPos start, WPos end, DateTime activation, ulong actorID)
+    {
+        var direction = end - start;
+        var rotation = Angle.FromDirection(direction);
+        var shape = new AOEShapeRect(direction.Length(), HalfWidth);
+        _lanes.Add(new(shape, start, rotation, activation, actorID: actorID, shapeDistance: shape.Distance(start, rotation)));
     }
 }
 
@@ -244,8 +365,7 @@ sealed class AcceptNoImitatorsStates : StateMachineBuilder
             .ActivateOnEnter<MadeMagic>()
             .ActivateOnEnter<BlackenedRain>()
             .ActivateOnEnter<DarkDealing>()
-            .ActivateOnEnter<HellwardBound>()
-            .ActivateOnEnter<ChargeDashes>();
+            .ActivateOnEnter<HellwardBound>();
     }
 }
 
@@ -263,4 +383,11 @@ sealed class AcceptNoImitatorsStates : StateMachineBuilder
     SortOrder = 9)]
 // Replay-verified 25y circular arena (players reach r24.8, the charge ends at r25 and the fence
 // kills at 24.6); the old 20y circle clipped the charge and misplaced the boundary drawing.
-public sealed class AcceptNoImitators(WorldState ws, Actor primary) : BossModule(ws, primary, new(500f, -310f), new ArenaBoundsCircle(25f));
+public sealed class AcceptNoImitators(WorldState ws, Actor primary) : BossModule(ws, primary, new(500f, -310f), new ArenaBoundsCircle(25f))
+{
+    protected override void CalculateModuleAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        if (FindComponent<HellwardBound>()?.DashPhaseActive == true)
+            hints.GoalZones.Add(AIHints.GoalProximity(Arena.Center, 20f, 5f));
+    }
+}

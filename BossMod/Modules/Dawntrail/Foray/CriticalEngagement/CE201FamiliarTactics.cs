@@ -38,23 +38,112 @@ public enum AID : uint
 
 sealed class FamiliarRaidwides(BossModule module) : Components.RaidwideCasts(module, [(uint)AID.HyperconductivePlasma, (uint)AID.AncientStorm]);
 sealed class BatteringArms(BossModule module) : Components.SingleTargetDelayableCast(module, (uint)AID.BatteringArms);
-sealed class SpinningSweep(BossModule module) : Components.SimpleAOEs(module, (uint)AID.SpinningSweep, new AOEShapeCone(40f, 60f.Degrees()));
+sealed class SpinningSweep(BossModule module) : Components.SimpleAOEs(module, (uint)AID.SpinningSweep, new AOEShapeCone(40f, 60f.Degrees()))
+{
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        foreach (var aoe in ActiveAOEs(slot, actor))
+            hints.AddForbiddenZone(aoe.Shape, aoe.Origin, aoe.Rotation, WorldState.CurrentTime);
+    }
+}
 
 // The blades remain dangerous while travelling. Their no-cast action effects (47531/47539)
 // only report contact after it happened, so the live actor positions are the useful warning.
 sealed class UnbowedSpirit(BossModule module) : Components.GenericAOEs(module)
 {
     private static readonly AOEShapeCircle Shape = new(4f);
+    private static readonly AOEShapeCircle AIShape = new(5.5f);
+    private const float PredictionLength = 8f;
+    private const double HelperHazardTimeout = 2d;
     private readonly List<Actor> _blades = module.Enemies((uint)OID.AlabasterBlade);
+    private readonly HashSet<ulong> _resolvedBladeIDs = [];
+    private readonly Dictionary<ulong, DateTime> _helperLastSeen = [];
+    private readonly List<Actor> _liveHazards = [with(16)];
     private readonly List<AOEInstance> _active = [with(8)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
     {
         _active.Clear();
-        foreach (var blade in _blades)
+        foreach (var blade in LiveHazards())
             AddBlade(blade);
         return CollectionsMarshal.AsSpan(_active);
     }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        var live = LiveHazards();
+        foreach (var blade in live)
+        {
+            hints.AddForbiddenZone(AIShape, blade.Position);
+            if (blade.LastFrameMovement.LengthSq() > 0.0001f)
+            {
+                var length = PredictionLength;
+                hints.AddForbiddenZone(new SDCapsule(blade.Position, blade.LastFrameMovement.Normalized(), length, 4.5f));
+            }
+        }
+
+        if (live.Length != 0)
+            hints.GoalZones.Add(position => live.All(blade => !position.InCircle(blade.Position, 7f)) ? 10f : 0f);
+    }
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
+    {
+        // The visible blade actor remains spawned for roughly two seconds after its cast effect.
+        // Retire it from the live hazard set as soon as the effect resolves instead of waiting
+        // for the delayed ActorControl destroy packet.
+        if (caster.OID == (uint)OID.AlabasterBlade && IsBladeResolution(spell.Action.ID))
+        {
+            _resolvedBladeIDs.Add(caster.InstanceID);
+            return;
+        }
+
+        // OID 0x233C helpers emit the moving no-cast pulses. Their actors survive several seconds
+        // after the final pulse, so use activity time rather than delayed destruction as lifetime.
+        if (caster.OID == (uint)OID.Helper && spell.Action.ID is (uint)AID.UnbowedSpirit or (uint)AID.Gale)
+            _helperLastSeen[caster.InstanceID] = WorldState.CurrentTime;
+    }
+
+    public override void OnActorDeath(Actor actor)
+    {
+        _resolvedBladeIDs.Remove(actor.InstanceID);
+        _helperLastSeen.Remove(actor.InstanceID);
+    }
+
+    public override void OnActorDestroyed(Actor actor)
+    {
+        _resolvedBladeIDs.Remove(actor.InstanceID);
+        _helperLastSeen.Remove(actor.InstanceID);
+    }
+
+    private Actor[] LiveHazards()
+    {
+        var now = WorldState.CurrentTime;
+        foreach (var id in _helperLastSeen.Where(entry => (now - entry.Value).TotalSeconds > HelperHazardTimeout).Select(entry => entry.Key).ToArray())
+            _helperLastSeen.Remove(id);
+
+        _liveHazards.Clear();
+        var seen = new HashSet<ulong>();
+        foreach (var blade in _blades)
+        {
+            if (!blade.IsDeadOrDestroyed && !_resolvedBladeIDs.Contains(blade.InstanceID) && seen.Add(blade.InstanceID))
+                _liveHazards.Add(blade);
+        }
+        foreach (var instanceID in _helperLastSeen.Keys)
+        {
+            if (WorldState.Actors.Find(instanceID) is { } helper && !helper.IsDeadOrDestroyed && seen.Add(instanceID))
+                _liveHazards.Add(helper);
+        }
+        return _liveHazards.ToArray();
+    }
+
+    private static bool IsBladeResolution(uint actionID) => actionID is
+        (uint)AID.UnbowedSpirit or
+        (uint)AID.InspiritedCyclone or
+        (uint)AID.InspiritedCrosswinds or
+        (uint)AID.InspiritedHurricaneCircle or
+        (uint)AID.InspiritedHurricaneCross or
+        (uint)AID.Gale or
+        (uint)AID.AncientAero;
 
     private void AddBlade(Actor blade)
     {
@@ -83,6 +172,9 @@ sealed class BladePatterns(BossModule module) : Components.GenericAOEs(module)
     private static readonly AOEShapeCircle Circle12 = new(12f);
     private static readonly AOEShapeCross Cross8 = new(60f, 4f);
     private static readonly AOEShapeCross Cross10 = new(60f, 5f);
+    // ARR helpers spawn on the arena edge and face inward; Action 47540 has range 70, so this
+    // rectangle is forward-only. A symmetric 35+35 shape leaves only about half the lane inside
+    // the arena and made the visible long line look truncated.
     private static readonly AOEShapeRect AncientAeroRect = new(70f, 3f);
     private static readonly AOEShapeCircle ImpactCircle = new(25f);
 
@@ -129,7 +221,10 @@ sealed class BladePatterns(BossModule module) : Components.GenericAOEs(module)
             return CollectionsMarshal.AsSpan(_displayed);
         }
 
-        var waveDeadline = _pending[0].AOE.Activation.AddSeconds(WaveWindow);
+        // Ancient Aero has a 3s cast and fires constantly; a 0.5s risk window leaves the AI no
+        // time to leave the 70y lane. Keep it risky for the whole cast.
+        var waveDeadline = _pending[0].AOE.Activation.AddSeconds(
+            _pending[0].ActionID == (uint)AID.AncientAero ? 2.5d : WaveWindow);
         foreach (var entry in _pending)
         {
             if (entry.AOE.Activation > waveDeadline)
@@ -144,6 +239,21 @@ sealed class BladePatterns(BossModule module) : Components.GenericAOEs(module)
     }
 
     public override void Update() => PruneExpired();
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        base.AddAIHints(slot, actor, assignment, hints);
+        var aoes = ActiveAOEs(slot, actor).ToArray();
+        var risky = aoes.Where(aoe => aoe.Risky).ToArray();
+        if (risky.Length != 0)
+            hints.GoalZones.Add(position => risky.All(aoe => !aoe.Check(position)) ? 20f : 0f);
+
+        if (_pending.Count != 0 && _pending[0].ActionID == (uint)AID.InspiritedImpact)
+        {
+            var staging = _displayed.Where(aoe => !aoe.Risky).LastOrDefault();
+            hints.GoalZones.Add(position => staging.Shape != null && staging.Check(position) && risky.All(aoe => !aoe.Check(position)) ? 40f : 0f);
+        }
+    }
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {

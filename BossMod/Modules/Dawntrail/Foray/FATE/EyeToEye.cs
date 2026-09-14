@@ -1,11 +1,9 @@
-﻿using System.ComponentModel;
-
-namespace BossMod.Dawntrail.Foray.FATE.NH105EvilSeer;
+﻿namespace BossMod.Dawntrail.Foray.FATE.EyeToEye;
 
 public enum OID : uint {
     EvilSeer = 0x4BA7,
     Helper = 0x233C,
-    EvilSeer1 = 0x4BAA, // R0.500, x0 (spawn during fight)
+    EvilSeerHelper = 0x4BAA, // R0.500, x0 (spawn during fight)
     AccursedOrb = 0x4BA8, // R2.000, x0 (spawn during fight)
 }
 
@@ -21,14 +19,17 @@ public enum AID : uint {
 }
 
 sealed class AllEyes(BossModule module) : Components.RaidwideCast(module, (uint)AID.AllEyes);
-sealed class Jettatura(BossModule module) : Components.SimpleAOEs(module, (uint)AID.Jettatura, new AOEShapeCircle(8.0f));
+sealed class Jettatura(BossModule module) : Components.SimpleAOEs(module, (uint)AID.Jettatura, 8f);
 sealed class ColdStare(BossModule module) : Components.SimpleAOEs(module, (uint)AID.ColdStare, new AOEShapeCone(40.0f, 45.0f.Degrees()));
-sealed class SeeNoEvil(BossModule module) : Components.CastGaze(module, (uint)AID.SeeNoEvil);
-sealed class SinisterSight(BossModule module) : Components.CastGaze(module, (uint)AID.SinisterSight);
+// ARR confirms both are gaze casts: SeeNoEvil is a 30y boss-centered gaze, SinisterSight is the
+// accursed orb's 50y petrifying gaze. Players inside the range must look away from the eye; the
+// orb cast targets every player in the arena, which matches an un-avoided gaze hit.
+sealed class SeeNoEvil(BossModule module) : Components.CastGaze(module, (uint)AID.SeeNoEvil, range: 30f);
+sealed class SinisterSight(BossModule module) : Components.CastGaze(module, (uint)AID.SinisterSight, range: 50f);
 
 [SkipLocalsInit]
-sealed class EvilSeerStates : StateMachineBuilder {
-    public EvilSeerStates(BossModule module) : base(module) {
+sealed class EyeToEyeStates : StateMachineBuilder {
+    public EyeToEyeStates(BossModule module) : base(module) {
         TrivialPhase()
             .ActivateOnEnter<AllEyes>()
             .ActivateOnEnter<SeeNoEvil>()
@@ -39,7 +40,7 @@ sealed class EvilSeerStates : StateMachineBuilder {
 }
 
 [ModuleInfo(BossModuleInfo.Maturity.Contributed,
-    StatesType = typeof(EvilSeerStates),
+    StatesType = typeof(EyeToEyeStates),
     ConfigType = null, // replace null with typeof(EvilSeerConfig) if applicable
     ObjectIDType = typeof(OID),
     ActionIDType = typeof(AID),
@@ -56,4 +57,4 @@ sealed class EvilSeerStates : StateMachineBuilder {
     SortOrder = 1,
     PlanLevel = 0)]
 [SkipLocalsInit]
-public sealed class EvilSeer(WorldState ws, Actor primary) : OpenWorldFate(ws, primary);
+public sealed class EyeToEye(WorldState ws, Actor primary) : OpenWorldFate(ws, primary);

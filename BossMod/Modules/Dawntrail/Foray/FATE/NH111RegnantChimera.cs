@@ -49,8 +49,8 @@ sealed class DragonsBreathSequence(BossModule module) : Components.GenericAOEs(m
         for (var i = 0; i < count; ++i)
         {
             var aoe = _pending[i].AOE;
-            if (i == 0 && count > 1)
-                aoe.Color = Colors.Danger;
+            aoe.Risky = i == 0;
+            aoe.Color = i == 0 ? Colors.Danger : Colors.AOE;
             _displayed.Add(aoe);
         }
         return CollectionsMarshal.AsSpan(_displayed);
@@ -189,8 +189,8 @@ sealed class IceBreathSequence(BossModule module) : Components.GenericAOEs(modul
         for (var i = 0; i < count; ++i)
         {
             var aoe = _pending[i].AOE;
-            if (i == 0 && count > 1)
-                aoe.Color = Colors.Danger;
+            aoe.Risky = i == 0;
+            aoe.Color = i == 0 ? Colors.Danger : Colors.AOE;
             _displayed.Add(aoe);
         }
         return CollectionsMarshal.AsSpan(_displayed);
@@ -237,9 +237,40 @@ sealed class IceBreathSequence(BossModule module) : Components.GenericAOEs(modul
         => _pending.RemoveAll(entry => entry.AOE.ActorID == actorID);
 }
 
-sealed class IceRoar(BossModule module) : Components.SimpleAOEs(module, (uint)AID.IceRoar, new AOEShapeCircle(12f));
+// 小冰钢铁: IceOrb 的 IceRoar 只有 0.7-1.0s 读条, SimpleAOEs 显示太晚 (<1s 走位)。
+// 改为从 IceOrb 实体实时画 12y 圈, 球一出现就提前显示。
+sealed class IceRoar(BossModule module) : Components.GenericAOEs(module)
+{
+    private static readonly AOEShapeCircle Shape = new(12f);
+    private readonly List<AOEInstance> _displayed = [with(8)];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
+    {
+        _displayed.Clear();
+        foreach (var orb in Module.Enemies((uint)OID.IceOrb))
+            if (!orb.IsDeadOrDestroyed)
+                _displayed.Add(new(Shape, orb.Position, color: Colors.Danger, actorID: orb.InstanceID,
+                    shapeDistance: Shape.Distance(orb.Position, default)));
+        return CollectionsMarshal.AsSpan(_displayed);
+    }
+}
 sealed class ChaoticChorus(BossModule module) : Components.SimpleAOEs(module, (uint)AID.ChaoticChorus, new AOEShapeCircle(6f));
-sealed class RamsVoice(BossModule module) : Components.SimpleAOEs(module, (uint)AID.RamsVoice, new AOEShapeCircle(9f));
+// Ice orbs begin their 0.7s casts roughly one second after Ram's Voice resolves. Retain the center
+// circle briefly so navigation does not immediately run back in, then reverse course as the first
+// orb warning appears. During that overlap the boss circle and first orb circles are solved as one
+// safe-region problem.
+sealed class RamsVoice(BossModule module) : Components.SimpleAOEs(module, (uint)AID.RamsVoice, new AOEShapeCircle(9f))
+{
+    private const double HoldAfterResolve = 2.25d;
+
+    public override void OnCastFinished(Actor caster, ActorCastInfo spell)
+    {
+        // Deliberately retained through the first IceRoar activation; Update clears it below.
+    }
+
+    public override void Update()
+        => Casters.RemoveAll(aoe => WorldState.CurrentTime > aoe.Activation.AddSeconds(HoldAfterResolve));
+}
 sealed class DragonsVoice(BossModule module) : Components.SimpleAOEGroups(module,
     [(uint)AID.DragonsVoice, (uint)AID.DragonsVoiceOrb], new AOEShapeDonut(8f, 30f));
 

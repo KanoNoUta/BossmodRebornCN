@@ -1,9 +1,9 @@
-﻿namespace BossMod.Dawntrail.Foray.FATE.NH108ArchKelpie;
+﻿namespace BossMod.Dawntrail.Foray.FATE.WavedAway;
 
 public enum OID : uint {
     ArchKelpie = 0x4B1F,
     Helper = 0x233C,
-    ArchKelpie1 = 0x4B5B, // R0.500, x0 (spawn during fight)
+    ArchKelpieHelper = 0x4B5B, // R0.500, x0 (spawn during fight)
 }
 
 public enum AID : uint {
@@ -23,7 +23,7 @@ sealed class WaveWhistle(BossModule module) : Components.SimpleAOEs(module, (uin
 sealed class WaterIV(BossModule module) : Components.RaidwideCast(module, (uint)AID.WaterIV);
 
 sealed class BloodyPuddle : Components.SimpleAOEs {
-    public BloodyPuddle(BossModule module) : base(module, (uint)AID.BloodyPuddle, new AOEShapeCircle(8.0f)) {
+    public BloodyPuddle(BossModule module) : base(module, (uint)AID.BloodyPuddle, 8f) {
         Color = Colors.Danger;
     }
 }
@@ -32,9 +32,20 @@ class StormWaveStart : Components.SimpleAOEs {
     public StormWaveStart(BossModule module) : base(module, (uint)AID.StormWaveStart, new AOEShapeRect(50.0f, 5.0f)) {
         Color = Colors.Danger;
     }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints) {
+        base.AddAIHints(slot, actor, assignment, hints);
+        var casters = CollectionsMarshal.AsSpan(Casters);
+        var count = casters.Length;
+        for (int i = 0; i < count; i++) {
+            var aoe = casters[i];
+            var right = aoe.Origin + aoe.Rotation.ToDirection().OrthoR() * 1.0f;
+            var left = aoe.Origin + aoe.Rotation.ToDirection().OrthoL() * 1.0f;
+            hints.GoalZones.Add(p => aoe.Shape.Check(p, right, aoe.Rotation) || aoe.Shape.Check(p, left, aoe.Rotation) ? 100.0f : 0.0f);
+        }
+    }
 }
 
-// TODO there has to be a better to do this
 class StormWave(BossModule module) : Components.Exaflare(module, new AOEShapeRect(25.0f, 2.5f, 25.0f)) {
     private readonly List<WaveSet> waves = [];
 
@@ -98,7 +109,9 @@ class StormWave(BossModule module) : Components.Exaflare(module, new AOEShapeRec
                 ref var aoe = ref futureAOEs[i];
                 var origin = aoe.Item1;
                 var rotation = aoe.Item3;
-                _aoes[i] = new(Shape, origin, rotation, aoe.Item2, FutureColor, shapeDistance: Shape.Distance(origin, rotation));
+                // Future steps are useful visual markers, but treating the whole wave train as
+                // dangerous at once sends navigation on a long detour around the arena.
+                _aoes[i] = new(Shape, origin, rotation, aoe.Item2, FutureColor, risky: false, shapeDistance: Shape.Distance(origin, rotation));
             }
 
             for (var i = 0; i < imminentLen; ++i) {
@@ -106,8 +119,9 @@ class StormWave(BossModule module) : Components.Exaflare(module, new AOEShapeRec
                 var origin = aoe.Item1;
                 var rotation = aoe.Item3;
                 var line = Lines[i];
-                var color = (waves.Find(w => w.RightLine == line || w.LeftLine == line)?.waveStart ?? true) ? ImminentColor : FutureColor;
-                _aoes[futureLen + i] = new(Shape, origin, rotation, aoe.Item2, color, shapeDistance: Shape.Distance(origin, rotation));
+                var risky = waves.Find(w => w.RightLine == line || w.LeftLine == line)?.waveStart ?? true;
+                var color = risky ? ImminentColor : FutureColor;
+                _aoes[futureLen + i] = new(Shape, origin, rotation, aoe.Item2, color, risky: risky, shapeDistance: Shape.Distance(origin, rotation));
             }
             lastCount = linesCount;
             lastVersion = currentVersion;
@@ -116,8 +130,8 @@ class StormWave(BossModule module) : Components.Exaflare(module, new AOEShapeRec
 }
 
 [SkipLocalsInit]
-sealed class ArchKelpieStates : StateMachineBuilder {
-    public ArchKelpieStates(BossModule module) : base(module) {
+sealed class WavedAwayStates : StateMachineBuilder {
+    public WavedAwayStates(BossModule module) : base(module) {
         TrivialPhase()
             .ActivateOnEnter<WaveWhistle>()
             .ActivateOnEnter<WaterIV>()
@@ -128,7 +142,7 @@ sealed class ArchKelpieStates : StateMachineBuilder {
 }
 
 [ModuleInfo(BossModuleInfo.Maturity.Contributed,
-    StatesType = typeof(ArchKelpieStates),
+    StatesType = typeof(WavedAwayStates),
     ConfigType = null, // replace null with typeof(ArchKelpieConfig) if applicable
     ObjectIDType = typeof(OID),
     ActionIDType = typeof(AID),
@@ -145,4 +159,4 @@ sealed class ArchKelpieStates : StateMachineBuilder {
     SortOrder = 1,
     PlanLevel = 0)]
 [SkipLocalsInit]
-public sealed class ArchKelpie(WorldState ws, Actor primary) : OpenWorldFate(ws, primary);
+public sealed class WavedAway(WorldState ws, Actor primary) : OpenWorldFate(ws, primary);

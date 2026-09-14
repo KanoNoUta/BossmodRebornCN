@@ -1,4 +1,4 @@
-﻿namespace BossMod.Dawntrail.Foray.FATE.NH103Cresceregina;
+﻿namespace BossMod.Dawntrail.Foray.FATE.Thunderregnum;
 
 public enum OID : uint {
     Cresceregina = 0x4D63,
@@ -29,13 +29,13 @@ public enum AID : uint {
 }
 
 sealed class RegalFulguration(BossModule module) : Components.SimpleAOEGroups(module, [(uint)AID.RegalFulguration, (uint)AID.RegalFulguration1], new AOEShapeCone(40.0f, 90.0f.Degrees()));
-sealed class Thunderbolt(BossModule module) : Components.SimpleAOEs(module, (uint)AID.Thunderbolt, new AOEShapeCircle(10.0f));
+sealed class Thunderbolt(BossModule module) : Components.SimpleAOEs(module, (uint)AID.Thunderbolt, 10f);
 sealed class NobleBlaster(BossModule module) : Components.SimpleAOEs(module, (uint)AID.NobleBlaster, new AOEShapeRect(50.0f, 2.5f));
 
 sealed class ThunderboltPuddle(BossModule module) : Components.GenericAOEs(module) {
     private static readonly AOEShapeCircle Shape = new(10f);
     private readonly List<AOEInstance> _aoes = [];
-    private readonly List<AOEInstance> _displayed = [with(3)];
+    private readonly List<AOEInstance> _displayed = [with(9)];
     private readonly HashSet<uint> _seenGlobalSequences = [];
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
@@ -85,8 +85,9 @@ sealed class ThunderboltPuddle(BossModule module) : Components.GenericAOEs(modul
             return CollectionsMarshal.AsSpan(_displayed);
 
         var riskyDeadline = _aoes[0].Activation.AddSeconds(0.2d);
-        var count = Math.Min(_aoes.Count, 3);
-        for (var i = 0; i < count; ++i) {
+        // All nine casts start together, so show the complete route immediately. Only the next
+        // circle is risky; later circles are planning markers and must not constrain pathfinding.
+        for (var i = 0; i < _aoes.Count; ++i) {
             var aoe = _aoes[i];
             aoe.Risky = aoe.Activation <= riskyDeadline;
             aoe.Color = aoe.Risky ? Colors.Danger : Colors.AOE;
@@ -97,9 +98,8 @@ sealed class ThunderboltPuddle(BossModule module) : Components.GenericAOEs(modul
 }
 
 [SkipLocalsInit]
-sealed class CrescereginaStates : StateMachineBuilder {
-    public CrescereginaStates(BossModule module) : base(module)
-    {
+sealed class ThunderregnumStates : StateMachineBuilder {
+    public ThunderregnumStates(BossModule module) : base(module) {
         TrivialPhase()
             .ActivateOnEnter<RegalFulguration>()
             .ActivateOnEnter<Thunderbolt>()
@@ -109,7 +109,7 @@ sealed class CrescereginaStates : StateMachineBuilder {
 }
 
 [ModuleInfo(BossModuleInfo.Maturity.Contributed,
-    StatesType = typeof(CrescereginaStates),
+    StatesType = typeof(ThunderregnumStates),
     ConfigType = null, // replace null with typeof(CrescereginaConfig) if applicable
     ObjectIDType = typeof(OID),
     ActionIDType = typeof(AID),
@@ -126,4 +126,4 @@ sealed class CrescereginaStates : StateMachineBuilder {
     SortOrder = 1,
     PlanLevel = 0)]
 [SkipLocalsInit]
-public sealed class Cresceregina(WorldState ws, Actor primary) : OpenWorldFate(ws, primary);
+public sealed class Thunderregnum(WorldState ws, Actor primary) : OpenWorldFate(ws, primary);

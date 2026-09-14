@@ -83,6 +83,14 @@ sealed class ElectricBoundary(BossModule module) : Components.GenericAOEs(module
     private readonly AOEInstance[] aoe = [new(Shape, module.Arena.Center)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => aoe;
+
+    public override void DrawArenaBackground(int pcSlot, Actor pc)
+    {
+        // The 18-25 donut is mostly clipped by the r20 arena; draw a visible yellow 19-20 band
+        // plus the fence outline so the kill ring reads clearly.
+        Arena.ZoneDonut(Arena.Center, 19f, 20f, Colors.Danger);
+        Arena.ZoneCircleOutlineUnclipped(Arena.Center, 20f, Colors.Danger, 3f);
+    }
 }
 
 sealed class TinyQuake(BossModule module) : ReplayValidatedCastAOEs(module) {
@@ -105,20 +113,52 @@ sealed class DiminutiveDualcast(BossModule module) : ReplayValidatedCastAOEs(mod
     private static readonly AOEShapeCone Blizzard = new(40.0f, 30.0f.Degrees());
     private static readonly AOEShapeCircle Fire = new(14.0f);
 
-    protected override int MaxDisplayed => 4;
-    protected override double RiskyActivationWindow => 0.2d;
+    // A complete dualcast wave contains two groups of three cones plus one fire circle.
+    // All seven overlap before the first group resolves, so limiting the queue to four drops
+    // the second cone group entirely.
+    protected override int MaxDisplayed => 7;
+    // The sequence resolves as three cones, then the fire circle, then three more cones at roughly
+    // two-second intervals. Display all seven, but only mark the current cones plus the fire risky;
+    // otherwise both cone groups combine into a false whole-arena danger zone.
+    protected override double RiskyActivationWindow => 2.5d;
 
     protected override AOEConfig? ConfigFor(uint actionID) => actionID switch {
         (uint)AID.TinyBlizzardIII => new(Blizzard),
         (uint)AID.TinyFireIII => new(Fire),
         _ => null
     };
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints) {
+        var aoes = ActiveAOEs(slot, actor).ToArray();
+        foreach (ref readonly var aoe in aoes.AsSpan()) {
+            if (!aoe.Risky) {
+                continue;
+            }
+
+            // BCBE is a 14y circle centered on the boss. Treat it as forbidden from cast start;
+            // otherwise pathfinding can enter it for uptime and schedule the escape too late.
+            var activation = ReferenceEquals(aoe.Shape, Fire) ? WorldState.CurrentTime : aoe.Activation;
+            hints.AddForbiddenZone(aoe.ShapeDistance ?? aoe.Shape.Distance(aoe.Origin, aoe.Rotation), activation);
+        }
+
+        // 引导 AI 到当前和未来都安全的位置: 只躲 risky 会让 AI 站进第二组扇形(左右互搏)。
+        hints.GoalZones.Add(position =>
+        {
+            foreach (ref readonly var aoe in aoes.AsSpan())
+            {
+                var sd = aoe.ShapeDistance ?? aoe.Shape.Distance(aoe.Origin, aoe.Rotation);
+                if (sd.Distance(position) <= 0)
+                    return 0f;
+            }
+            return 5f;
+        });
+    }
 }
 
 sealed class TinyMeteor(BossModule module) : ReplayValidatedCastAOEs(module) {
     private static readonly AOEShapeCircle Shape = new(6.0f);
 
-    protected override double RiskyActivationWindow => 0.2d;
+    protected override double RiskyActivationWindow => 0.8d;
 
     protected override AOEConfig? ConfigFor(uint actionID) => actionID == (uint)AID.TinyMeteor ? new(Shape, true) : null;
 }
@@ -189,9 +229,14 @@ sealed class Comet(BossModule module) : BossComponent(module) {
             return;
         }
 
+        // The comet's nominal cast reads ~60s but it detonates far sooner once tethered (replay:
+        // cast start +20s). The blast is a 60y circle covering the whole r20 arena, so the only
+        // counter is killing the tethered comet; outline the blast radius around the kill target
+        // so players see how urgent it is to focus it down.
         foreach (var comet in comets.Values) {
             if (comet.Tethers == maxTethers) {
                 Arena.ZoneCircleOutline(comet.Actor.Position, 2.0f, Colors.Safe, 2.0f);
+                Arena.ZoneCircleOutline(comet.Actor.Position, 60.0f, Colors.Danger, 1.0f);
             }
         }
     }
@@ -199,6 +244,34 @@ sealed class Comet(BossModule module) : BossComponent(module) {
     public override void AddHints(int slot, Actor actor, TextHints hints) {
         if (MaxTetherCount() > 0) {
             hints.Add("Attack a comet with a green circle around it!");
+        }
+    }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints) {
+        var maxTethers = MaxTetherCount();
+        if (maxTethers <= 0) {
+            return;
+        }
+
+        // force the AI to focus the green-circled comet; keep Priority so it stays in PriorityTargets,
+        // and if several comets are tied, pick the one closest to the player
+        Actor? forcedTarget = null;
+        var forcedDistSq = float.MaxValue;
+        foreach (var target in hints.PotentialTargets) {
+            if (target.Actor.OID == (uint)OID.ArcaneSphereSmall
+                && comets.GetValueOrDefault(target.Actor.InstanceID)?.Tethers == maxTethers) {
+                target.Priority = 2;
+
+                var distSq = (target.Actor.Position - actor.Position).LengthSq();
+                if (distSq < forcedDistSq) {
+                    forcedDistSq = distSq;
+                    forcedTarget = target.Actor;
+                }
+            }
+        }
+
+        if (forcedTarget != null) {
+            hints.ForcedTarget = forcedTarget;
         }
     }
 
@@ -242,6 +315,17 @@ static class TinyMageMechanic {
     // Replay-verified: the growing orb resolves 15.4-15.6s after it spawns (27.0->42.5,
     // 174.2->189.6, 241.6->256.8), so both growable components share this delay.
     public const double GrowResolveDelay = 15.5d;
+    public const double ResolveVisualHold = 0.9d;
+
+    public static List<Actor> ExistingMages(BossModule module) {
+        var result = new List<Actor>(4);
+        foreach (var mage in module.Enemies((uint)OID.TinyApprentice)) {
+            if (!mage.IsDeadOrDestroyed) {
+                AddMage(result, mage, module.Arena.Center);
+            }
+        }
+        return result;
+    }
 
     public static void AddMage(List<Actor> mages, Actor actor, WPos center) {
         if (mages.Any(mage => mage.InstanceID == actor.InstanceID)) {
@@ -289,11 +373,14 @@ static class TinyMageMechanic {
 
 sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
     private static readonly AOEShapeCircle Shape = new(18.0f);
-    private readonly List<Actor> mages = [];
+    private readonly List<Actor> mages = TinyMageMechanic.ExistingMages(module);
     private Actor? orb;
     private WPos? start;
+    private WPos? predictedTarget;
+    private WPos? directTarget;
     private ulong startActorID;
     private DateTime activation;
+    private DateTime clearAt;
     private float previousAngle;
     private float angularTravel;
     private int direction;
@@ -301,6 +388,13 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
     public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
         if (spell.Action.ID == (uint)AID.SmallForOne) {
             ResetWave();
+        } else if (spell.Action.ID == (uint)AID.TinyFlare1 && !spell.EventHappened) {
+            // The resolving helper is authoritative and is also available when apprentice/orb
+            // spawn or movement packets were missed. This prevents an entire fire wave from
+            // disappearing merely because the four-actor reconstruction was incomplete.
+            directTarget = caster.Position;
+            activation = Module.CastFinishAt(spell);
+            clearAt = default;
         }
     }
 
@@ -308,20 +402,20 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
         if (actor.OID == (uint)OID.TinyApprentice) {
             TinyMageMechanic.AddMage(mages, actor, Arena.Center);
         } else if (actor.OID == (uint)OID.FlareSphereGrow) {
-            orb = actor;
-            start = actor.Position;
-            startActorID = actor.InstanceID;
-            activation = WorldState.FutureTime(TinyMageMechanic.GrowResolveDelay);
-            previousAngle = TinyMageMechanic.AngleFromNorth(actor.Position, Arena.Center);
-            angularTravel = default;
-            direction = default;
+            StartOrb(actor);
         }
     }
 
     public override void Update() {
+        RecoverExistingActors();
+        if (clearAt != default && WorldState.CurrentTime >= clearAt) {
+            ClearStart();
+            return;
+        }
         if (orb != null && direction == 0) {
             direction = TinyMageMechanic.ObserveDirection(orb, Arena.Center, ref previousAngle, ref angularTravel);
         }
+        UpdatePredictedTarget();
     }
 
     public override void OnActorDeath(Actor actor) {
@@ -334,39 +428,76 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell) {
         if (spell.Action.ID == (uint)AID.TinyFlare1) {
-            ClearStart();
+            // The damage packet precedes the visible floor telegraph disappearing. Retain the
+            // forbidden circle briefly so automation does not immediately walk into the fading VFX.
+            clearAt = WorldState.FutureTime(TinyMageMechanic.ResolveVisualHold);
         }
     }
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) {
-        if (mages.Count != 4 || start == null || direction == 0) {
-            return [];
+        RecoverExistingActors();
+        if (directTarget is { } resolved) {
+            return new AOEInstance[1] { new(Shape, resolved, activation: activation) };
         }
-
-        var startAOE = mages.FindIndex(mage => mage.Position.AlmostEqual(start.Value, 0.5f));
-        if (startAOE < 0) {
-            return [];
-        }
-
-        var targetActor = mages[(startAOE + mages.Count - direction) % mages.Count];
-        return new AOEInstance[1] { new(Shape, targetActor.Position, activation: activation) };
+        UpdatePredictedTarget();
+        return predictedTarget is { } predicted ? new AOEInstance[1] { new(Shape, predicted, activation: activation) } : [];
     }
 
     private void RemoveActor(Actor actor) {
         TinyMageMechanic.RemoveMage(mages, actor.InstanceID);
         if (actor.InstanceID == startActorID) {
-            ClearStart();
+            clearAt = WorldState.FutureTime(TinyMageMechanic.ResolveVisualHold);
         }
+    }
+
+    private void RecoverExistingActors() {
+        foreach (var mage in Module.Enemies((uint)OID.TinyApprentice)) {
+            if (!mage.IsDeadOrDestroyed) {
+                TinyMageMechanic.AddMage(mages, mage, Arena.Center);
+            }
+        }
+        if (orb == null) {
+            var existing = Module.Enemies((uint)OID.FlareSphereGrow).FirstOrDefault(actor => !actor.IsDeadOrDestroyed);
+            if (existing != null) {
+                StartOrb(existing);
+            }
+        }
+    }
+
+    private void StartOrb(Actor actor) {
+        orb = actor;
+        start = actor.Position;
+        predictedTarget = null;
+        startActorID = actor.InstanceID;
+        activation = WorldState.FutureTime(TinyMageMechanic.GrowResolveDelay);
+        clearAt = default;
+        previousAngle = TinyMageMechanic.AngleFromNorth(actor.Position, Arena.Center);
+        angularTravel = default;
+        direction = default;
     }
 
     private void ClearStart() {
         orb = null;
         start = null;
+        predictedTarget = null;
+        directTarget = null;
         startActorID = default;
         activation = default;
+        clearAt = default;
         previousAngle = default;
         angularTravel = default;
         direction = default;
+    }
+
+    private void UpdatePredictedTarget() {
+        if (mages.Count != 4 || start == null || direction == 0) {
+            return;
+        }
+
+        var startAOE = mages.FindIndex(mage => mage.Position.AlmostEqual(start.Value, 0.5f));
+        if (startAOE >= 0) {
+            predictedTarget = mages[(startAOE + mages.Count - direction) % mages.Count].Position;
+        }
     }
 
     private void ResetWave() {
@@ -376,11 +507,16 @@ sealed class FlareGrowable(BossModule module) : Components.GenericAOEs(module) {
 }
 
 sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(module) {
-    private readonly List<Actor> mages = [];
+    // delay the knockback forbidden zone & goal hint until 4s before activation to avoid long-range suppression
+    internal const float KnockbackHintLeadTime = 4f;
+    private readonly List<Actor> mages = TinyMageMechanic.ExistingMages(module);
     private Actor? orb;
     private WPos? start;
+    private WPos? predictedTarget;
+    private WPos? directTarget;
     private ulong startActorID;
     private DateTime activation;
+    private DateTime clearAt;
     private float previousAngle;
     private float angularTravel;
     private int direction;
@@ -388,6 +524,10 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
     public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
         if (spell.Action.ID == (uint)AID.SmallForOne) {
             ResetWave();
+        } else if (spell.Action.ID == (uint)AID.TinyHoly1 && !spell.EventHappened) {
+            directTarget = caster.Position;
+            activation = Module.CastFinishAt(spell);
+            clearAt = default;
         }
     }
 
@@ -395,20 +535,20 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
         if (actor.OID == (uint)OID.TinyApprentice) {
             TinyMageMechanic.AddMage(mages, actor, Arena.Center);
         } else if (actor.OID == (uint)OID.HolySphere1Grow) {
-            orb = actor;
-            start = actor.Position;
-            startActorID = actor.InstanceID;
-            activation = WorldState.FutureTime(TinyMageMechanic.GrowResolveDelay);
-            previousAngle = TinyMageMechanic.AngleFromNorth(actor.Position, Arena.Center);
-            angularTravel = default;
-            direction = default;
+            StartOrb(actor);
         }
     }
 
     public override void Update() {
+        RecoverExistingActors();
+        if (clearAt != default && WorldState.CurrentTime >= clearAt) {
+            ClearStart();
+            return;
+        }
         if (orb != null && direction == 0) {
             direction = TinyMageMechanic.ObserveDirection(orb, Arena.Center, ref previousAngle, ref angularTravel);
         }
+        UpdatePredictedTarget();
     }
 
     public override void OnActorDeath(Actor actor) {
@@ -426,31 +566,88 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
     }
 
     public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor) {
-        if (mages.Count != 4 || start == null || direction == 0) {
-            return [];
+        RecoverExistingActors();
+        if (directTarget is { } resolved) {
+            return new Knockback[1] { new(resolved, 15.0f, activation) };
         }
+        UpdatePredictedTarget();
+        return predictedTarget is { } predicted ? new Knockback[1] { new(predicted, 15.0f, activation) } : [];
+    }
 
-        var startAOE = mages.FindIndex(mage => mage.Position.AlmostEqual(start.Value, 0.5f));
-        if (startAOE < 0) {
-            return [];
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints) {
+        var knockbacks = ActiveKnockbacks(slot, actor);
+        if (knockbacks.Length != 0) {
+            ref readonly var knockback = ref knockbacks[0];
+            // 仅当击退临近结算（<= 4 秒）时才给 AI 生成禁区与引导，避免球出生后约 12 秒的远期预判压制全场目标区
+            if (knockback.Activation - WorldState.CurrentTime > TimeSpan.FromSeconds(KnockbackHintLeadTime)) {
+                return;
+            }
+            var sd = new SDKnockbackInCircleAwayFromOrigin(Arena.Center, knockback.Origin, knockback.Distance, 19f);
+            hints.AddForbiddenZone(sd, knockback.Activation);
+            // 引导 AI 到安全位置: 被 15y 击退后落点仍在 19y 电网内, 落点越靠中心分越高。
+            var origin = knockback.Origin;
+            var distance = knockback.Distance;
+            hints.GoalZones.Add(position =>
+            {
+                var projected = position + distance * (position - origin).Normalized();
+                var dist = (projected - Arena.Center).Length();
+                return dist < 19f ? 10f - dist * 0.5f : 0f;
+            });
         }
-
-        var targetActor = mages[(startAOE + mages.Count - direction) % mages.Count];
-        return new Knockback[1] { new(targetActor.Position, 15.0f, activation) };
     }
 
     private void RemoveActor(Actor actor) {
         TinyMageMechanic.RemoveMage(mages, actor.InstanceID);
         if (actor.InstanceID == startActorID) {
-            ClearStart();
+            clearAt = WorldState.FutureTime(TinyMageMechanic.ResolveVisualHold);
+        }
+    }
+
+    private void RecoverExistingActors() {
+        foreach (var mage in Module.Enemies((uint)OID.TinyApprentice)) {
+            if (!mage.IsDeadOrDestroyed) {
+                TinyMageMechanic.AddMage(mages, mage, Arena.Center);
+            }
+        }
+        if (orb == null) {
+            var existing = Module.Enemies((uint)OID.HolySphere1Grow).FirstOrDefault(actor => !actor.IsDeadOrDestroyed);
+            if (existing != null) {
+                StartOrb(existing);
+            }
+        }
+    }
+
+    private void StartOrb(Actor actor) {
+        orb = actor;
+        start = actor.Position;
+        predictedTarget = null;
+        startActorID = actor.InstanceID;
+        activation = WorldState.FutureTime(TinyMageMechanic.GrowResolveDelay);
+        clearAt = default;
+        previousAngle = TinyMageMechanic.AngleFromNorth(actor.Position, Arena.Center);
+        angularTravel = default;
+        direction = default;
+    }
+
+    private void UpdatePredictedTarget() {
+        if (mages.Count != 4 || start == null || direction == 0) {
+            return;
+        }
+
+        var startAOE = mages.FindIndex(mage => mage.Position.AlmostEqual(start.Value, 0.5f));
+        if (startAOE >= 0) {
+            predictedTarget = mages[(startAOE + mages.Count - direction) % mages.Count].Position;
         }
     }
 
     private void ClearStart() {
         orb = null;
         start = null;
+        predictedTarget = null;
+        directTarget = null;
         startActorID = default;
         activation = default;
+        clearAt = default;
         previousAngle = default;
         angularTravel = default;
         direction = default;
@@ -464,8 +661,13 @@ sealed class HolyGrowable(BossModule module) : Components.GenericKnockback(modul
 
 static class OrbPairMechanic {
     // Replay-verified (two full waves): the first pair pops 10s after the orbs spawn/tether and
-    // the remaining pairs follow in tether order every 3s; the 1.7s resolve cast then refines
-    // the final activation via UpdateActivation.
+    // the remaining pairs follow in order of increasing tether-line length (NOT tether arrival
+    // order - all four lines arrive in the same frame, and the actual pop order matches the
+    // pair-distance ascending order) every 3s; the 1.7s resolve cast then refines the final
+    // activation via UpdateActivation.
+    // Two-wave replay validation: the actual pop order equals the ascending pair distance; the
+    // 10s/3s constants themselves are correct, and the constant ~0.7s estimate bias comes from
+    // the server linking the orbs before the client TETH event arrives.
     private const double FirstResolveDelay = 10.0d;
     private const double ResolveStagger = 3.0d;
 
@@ -498,20 +700,33 @@ sealed class OrbPairTimeline(BossModule module) : BossComponent(module) {
         public readonly float Distance = distance;
         public DateTime Activation = activation;
         public ulong ActorID;
+        public DateTime ClearAt;
     }
 
+    // All four TETH 415 lines arrive in the same frame; the actual pop order equals the
+    // ascending pair distance, so pairs are collected here and built into entries in Update()
+    // once the whole wave's tethers have been received.
+    private readonly record struct PendingPair(OrbPairMechanic.Key Key, Kind Kind, WPos Origin, float Distance);
+
     private readonly List<Entry> entries = [];
+    private readonly List<PendingPair> pending = [];
     private readonly HashSet<OrbPairMechanic.Key> pairs = [];
     private readonly HashSet<uint> seenGlobalSequences = [];
 
     public List<Entry> Upcoming(int count) {
         PruneExpired();
         return entries
+            .Where(entry => entry.ClearAt == default)
             .OrderBy(entry => entry.Activation)
             .ThenBy(entry => entry.Distance)
             .ThenBy(entry => entry.Key.First)
             .Take(count)
             .ToList();
+    }
+
+    public List<Entry> RetainedFlares() {
+        PruneExpired();
+        return entries.Where(entry => entry.Type == Kind.Flare && entry.ClearAt != default).ToList();
     }
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
@@ -547,7 +762,7 @@ sealed class OrbPairTimeline(BossModule module) : BossComponent(module) {
         }
 
         var distance = (target.Position - source.Position).Length();
-        entries.Add(new(key, kind.Value, WPos.Lerp(source.Position, target.Position, 0.5f), distance, OrbPairMechanic.EstimateActivation(WorldState, entries.Count)));
+        pending.Add(new(key, kind.Value, WPos.Lerp(source.Position, target.Position, 0.5f), distance));
     }
 
     public override void OnActorDeath(Actor actor) => RemoveActor(actor.InstanceID);
@@ -559,10 +774,32 @@ sealed class OrbPairTimeline(BossModule module) : BossComponent(module) {
             return;
         }
 
-        RemoveAt(kind.Value, caster);
+        ResolveAt(kind.Value, caster);
     }
 
-    public override void Update() => PruneExpired();
+    public override void Update() {
+        PruneExpired();
+        BuildPendingEntries();
+    }
+
+    // The four TETH 415 lines arrive in the same frame, so building entries in arrival order
+    // misassigns orderIndex: the actual pop order equals the ascending tether-line length.
+    // Build them all here, ordered by pair distance ascending, to match the real sequence.
+    private void BuildPendingEntries() {
+        if (pending.Count == 0) {
+            return;
+        }
+
+        pending.Sort((left, right) => {
+            var result = left.Distance.CompareTo(right.Distance);
+            return result != 0 ? result : left.Key.First.CompareTo(right.Key.First);
+        });
+        var orderIndex = entries.Count;
+        foreach (var pair in pending) {
+            entries.Add(new(pair.Key, pair.Kind, pair.Origin, pair.Distance, OrbPairMechanic.EstimateActivation(WorldState, orderIndex++)));
+        }
+        pending.Clear();
+    }
 
     private static Kind? KindForAction(uint actionID) => actionID switch {
         (uint)AID.TinyFlare1 => Kind.Flare,
@@ -581,18 +818,36 @@ sealed class OrbPairTimeline(BossModule module) : BossComponent(module) {
     }
 
     private void UpdateActivation(Kind kind, Actor caster, DateTime activation) {
+        // Update only the single nearest matching entry: updating every position match would
+        // let a later pair's resolve cast refine an earlier pair's estimate (and vice versa).
+        Entry? nearest = null;
+        var nearestDistanceSq = float.MaxValue;
         foreach (var entry in entries) {
-            if (entry.Type == kind && entry.Origin.AlmostEqual(caster.Position, 1.5f)) {
-                entry.Activation = activation;
-                entry.ActorID = caster.InstanceID;
+            if (entry.Type != kind || entry.ClearAt != default || !entry.Origin.AlmostEqual(caster.Position, 1.5f)) {
+                continue;
             }
+            var distanceSq = (entry.Origin - caster.Position).LengthSq();
+            if (distanceSq < nearestDistanceSq) {
+                nearestDistanceSq = distanceSq;
+                nearest = entry;
+            }
+        }
+        if (nearest != null) {
+            nearest.Activation = activation;
+            nearest.ActorID = caster.InstanceID;
         }
     }
 
-    private void RemoveAt(Kind kind, Actor caster) {
+    private void ResolveAt(Kind kind, Actor caster) {
         for (var i = entries.Count - 1; i >= 0; --i) {
             var entry = entries[i];
-            if (entry.Type == kind && (entry.ActorID == caster.InstanceID || entry.Origin.AlmostEqual(caster.Position, 1.5f))) {
+            if (entry.Type != kind || entry.ClearAt != default || entry.ActorID != caster.InstanceID && !entry.Origin.AlmostEqual(caster.Position, 1.5f)) {
+                continue;
+            }
+
+            if (kind == Kind.Flare) {
+                entry.ClearAt = WorldState.FutureTime(TinyMageMechanic.ResolveVisualHold);
+            } else {
                 pairs.Remove(entry.Key);
                 entries.RemoveAt(i);
             }
@@ -603,6 +858,9 @@ sealed class OrbPairTimeline(BossModule module) : BossComponent(module) {
         for (var i = entries.Count - 1; i >= 0; --i) {
             var key = entries[i].Key;
             if (key.First == instanceID || key.Second == instanceID) {
+                if (entries[i].Type == Kind.Flare && entries[i].ClearAt != default) {
+                    continue;
+                }
                 pairs.Remove(key);
                 entries.RemoveAt(i);
             }
@@ -611,6 +869,7 @@ sealed class OrbPairTimeline(BossModule module) : BossComponent(module) {
 
     private void ResetWave() {
         entries.Clear();
+        pending.Clear();
         pairs.Clear();
         seenGlobalSequences.Clear();
     }
@@ -618,8 +877,9 @@ sealed class OrbPairTimeline(BossModule module) : BossComponent(module) {
     private void PruneExpired() {
         var now = WorldState.CurrentTime;
         for (var i = entries.Count - 1; i >= 0; --i) {
-            if (now > entries[i].Activation.AddSeconds(ExpireDelay)) {
-                pairs.Remove(entries[i].Key);
+            var entry = entries[i];
+            if (entry.ClearAt != default ? now >= entry.ClearAt : now > entry.Activation.AddSeconds(ExpireDelay)) {
+                pairs.Remove(entry.Key);
                 entries.RemoveAt(i);
             }
         }
@@ -633,16 +893,20 @@ sealed class FlareCombo(BossModule module) : Components.GenericAOEs(module) {
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) {
         displayed.Clear();
-        var upcoming = timeline.Upcoming(2);
-        if (upcoming.Count == 0) {
-            return [];
+        foreach (var entry in timeline.RetainedFlares()) {
+            displayed.Add(new(Shape, entry.Origin, activation: entry.Activation, color: Colors.Danger, risky: true, actorID: entry.ActorID));
         }
 
-        var imminentDeadline = upcoming[0].Activation.AddSeconds(0.2d);
-        foreach (var entry in upcoming) {
-            if (entry.Type == OrbPairTimeline.Kind.Flare) {
-                var imminent = entry.Activation <= imminentDeadline;
-                displayed.Add(new(Shape, entry.Origin, activation: entry.Activation, color: imminent ? Colors.Danger : Colors.AOE, risky: imminent, actorID: entry.ActorID));
+        var upcoming = timeline.Upcoming(2);
+        if (upcoming.Count != 0) {
+            // Flare resolves as a 18y circle; automation needs the full remaining cast to move out
+            // (replay: AI was clipped at 17.8y in the 18y radius). Mark risky well before resolve.
+            var imminentDeadline = upcoming[0].Activation.AddSeconds(1.0d);
+            foreach (var entry in upcoming) {
+                if (entry.Type == OrbPairTimeline.Kind.Flare) {
+                    var imminent = entry.Activation <= imminentDeadline;
+                    displayed.Add(new(Shape, entry.Origin, activation: entry.Activation, color: imminent ? Colors.Danger : Colors.AOE, risky: imminent, actorID: entry.ActorID));
+                }
             }
         }
         return CollectionsMarshal.AsSpan(displayed);
@@ -650,16 +914,59 @@ sealed class FlareCombo(BossModule module) : Components.GenericAOEs(module) {
 }
 
 sealed class HolyCombo(BossModule module) : Components.GenericKnockback(module) {
+    // matches FlareCombo's flare radius (18y circle, AID.TinyFlare1; FlareCombo.Shape is private,
+    // so the value is duplicated here). A holy knockback can shove the player straight into a flare
+    // pair that resolves later (ResolveStagger is 3s - too late to run out), so the knockback's
+    // forbidden landing-spot check must also include those flare circles.
+    private const float FlareRadius = 18f;
     private readonly OrbPairTimeline timeline = module.FindComponent<OrbPairTimeline>()!;
 
     public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor) {
-        var upcoming = timeline.Upcoming(1);
-        if (upcoming.Count == 0 || upcoming[0].Type != OrbPairTimeline.Kind.Holy) {
-            return [];
+        // Scan the next four entries instead of only the first: a misestimated earlier entry
+        // (flare or holy) must not permanently occupy the sole warning slot. Show the first
+        // holy that is not stale; the ~0.7s constant estimate bias may make it slightly past
+        // due, so tolerate 0.5s of staleness. If every holy is stale (estimation ran early),
+        // fall back to the nearest one - showing it plainly beats showing nothing.
+        var upcoming = timeline.Upcoming(4);
+        var now = WorldState.CurrentTime;
+        var fallback = default(OrbPairTimeline.Entry?);
+        foreach (var next in upcoming) {
+            if (next.Type != OrbPairTimeline.Kind.Holy) {
+                continue;
+            }
+            fallback ??= next;
+            if (next.Activation > now.AddSeconds(-0.5d)) {
+                return new Knockback[1] { new(next.Origin, 15.0f, next.Activation, actorID: next.ActorID) };
+            }
         }
+        return fallback is { } stale ? new Knockback[1] { new(stale.Origin, 15.0f, stale.Activation, actorID: stale.ActorID) } : [];
+    }
 
-        var next = upcoming[0];
-        return new Knockback[1] { new(next.Origin, 15.0f, next.Activation, actorID: next.ActorID) };
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints) {
+        var knockbacks = ActiveKnockbacks(slot, actor);
+        if (knockbacks.Length != 0) {
+            ref readonly var knockback = ref knockbacks[0];
+            // 与 HolyGrowable 对齐的 4s 门控：远期击退预判提前 ~12s 进 AI 视野会长期压制目标区/触发逃逸
+            // （2026-08-19 实测 08:34:41 波玩家手动读条被 AI 逃逸移动打断 8 次）
+            if (knockback.Activation - WorldState.CurrentTime > TimeSpan.FromSeconds(HolyGrowable.KnockbackHintLeadTime)) {
+                return;
+            }
+            // The forbidden zone covers landing outside the 19f safe circle (as before) and also
+            // landing inside any flare pair that resolves AFTER this holy knockback: without the
+            // latter, the AI picks a spot "safe for the knockback" that is knocked straight into
+            // the flare circle, which resolves ~3s later - too late to run out. Flares resolving
+            // at or before this knockback are excluded (their static zone already covers them and
+            // mixing them in would over-restrict). Activation stays the knockback's own time, so
+            // the zone is live (and most urgent) for the pre-knockback positioning decision.
+            var flareCenters = new WPos[4]; // at most 4 pairs per wave
+            var count = 0;
+            foreach (var next in timeline.Upcoming(4)) {
+                if (next.Type == OrbPairTimeline.Kind.Flare && next.ClearAt == default && next.Activation > knockback.Activation) {
+                    flareCenters[count++] = next.Origin;
+                }
+            }
+            hints.AddForbiddenZone(new SDKnockbackInCircleAwayFromOriginPlusAOECircles(Arena.Center, knockback.Origin, knockback.Distance, 19f, flareCenters, FlareRadius, count), knockback.Activation);
+        }
     }
 }
 

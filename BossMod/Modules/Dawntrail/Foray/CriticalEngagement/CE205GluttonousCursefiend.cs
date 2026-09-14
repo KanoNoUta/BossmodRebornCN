@@ -48,21 +48,26 @@ public enum AID : uint
 
 sealed class MiasmaBoundary(BossModule module) : Components.GenericAOEs(module)
 {
-    // Replay boundary damage lands at ~28.6y and the fire strips reach the same edge, so the real
-    // walkable arena is about 28y, not 20y. Keep a small margin inside the measured wall.
-    private static readonly AOEShapeDonut Shape = new(27.5f, 30f);
+    // 实测电网边界约 ±23.5y (玩家抓坐标: Z -23.78 / +23.4)。之前按 28y 画大了, 导致躲地火时
+    // 跑到 23.5~28 的假安全区踩进电网。电网外圈 30y (解包 EffectRange), 可见部分贴边绘制。
+    private static readonly AOEShapeDonut Shape = new(23.5f, 30f);
     private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
+
+    public override void DrawArenaBackground(int pcSlot, Actor pc)
+    {
+        Arena.ZoneDonut(Arena.Center, 22.5f, 23.5f, Colors.Danger);
+        Arena.ZoneCircleOutlineUnclipped(Arena.Center, 23.5f, Colors.Danger, 3f);
+    }
 }
 
 // These actions all have usable CastStart packets in the replays. Keep the warning active until
 // the matching cast resolves; ActionEffect packet loss must not make the pre-cast telegraph vanish.
 sealed class AlgolAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 {
-    // The tomato-miasma helper sits at the strip's center: every recorded cast targets a point
-    // exactly 25y forward, and victims are hit just behind the helper too, so the strip is a
-    // symmetric 50y x 6y rect. A front-only rect previously left the near half undrawn.
+    // Action effects hit targets up to 25y on both sides of the helper, so the helper is the center
+    // of the 50x6 strip rather than its rear edge.
     private static readonly AOEShapeRect Tomato = new(25f, 3f, 25f);
     private static readonly AOEShapeCone Onion = new(60f, 15f.Degrees());
     private static readonly AOEShapeRect Cannon = new(40f, 25f);
@@ -99,6 +104,7 @@ sealed class AlgolDrawIn(BossModule module) : Components.GenericKnockback(module
     private static readonly Angle DefaultSpinStep = -15f.Degrees();
     private static readonly AOEShapeCone LongCone = new(60f, 15f.Degrees());
     private static readonly AOEShapeCone ShortCone = new(30f, 15f.Degrees());
+    private static readonly AOEShapeCone SafeCone = new(12f, 15f.Degrees());
     // slightly wider than the drawn cones so the AI keeps a margin from the sweep edge
     private static readonly AOEShapeCone HintCone = new(30f, 22.5f.Degrees());
     private readonly List<Knockback> _active = [with(2)];
@@ -136,6 +142,9 @@ sealed class AlgolDrawIn(BossModule module) : Components.GenericKnockback(module
             var step = _spinStep == default ? DefaultSpinStep : _spinStep;
             ShortCone.Draw(Arena, spinning.Origin, spinning.Direction);
             ShortCone.Outline(Arena, spinning.Origin, spinning.Direction + step);
+            // 绿色安全扇形: 危险区起点后面 (已扫过侧), 贴着 boss 跟着绕圈.
+            var safeDir = spinning.Direction - step * 3;
+            SafeCone.Draw(Arena, spinning.Origin, safeDir, Colors.Safe);
         }
     }
 
@@ -154,6 +163,11 @@ sealed class AlgolDrawIn(BossModule module) : Components.GenericKnockback(module
                 direction += step;
                 activation = activation.AddSeconds(SpinTickInterval);
             }
+
+            // 旋转吸引: 安全位置在危险区起点后面 (已扫过侧), AI 贴着 boss 绕圈走, 而不是追 boss/被吸进去.
+            // 目标点 = boss 位置 + 旋转反方向 3 步 (危险区刚扫过的后方), 距离短保证移速能跟上绕圈.
+            var safeDir = spinning.Direction - step * 3;
+            hints.GoalZones.Add(AIHints.GoalSingleTarget(spinning.Origin + safeDir.ToDirection() * 9f, 4f));
         }
     }
 
@@ -270,4 +284,4 @@ sealed class GluttonousCursefiendStates : StateMachineBuilder
     SortOrder = 4)]
 // Replay player positions and the 28.6y boundary hits show the arena is 28y, not 20y; the old
 // 20y circle clipped the outer halves of the long fire strips.
-public sealed class GluttonousCursefiend(WorldState ws, Actor primary) : BossModule(ws, primary, new(765f, 0f), new ArenaBoundsCircle(28f));
+public sealed class GluttonousCursefiend(WorldState ws, Actor primary) : BossModule(ws, primary, new(765f, 0f), new ArenaBoundsCircle(23.5f));

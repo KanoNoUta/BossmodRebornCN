@@ -16,7 +16,7 @@ public enum AID : uint
 {
     IdleVisual = 0xB949, // boss->event target, no effects
     AutoAttack = 0xB94A, // boss->player, no cast, single-target
-    WindBoundary = 0xB94B, // anchor, persistent 20-30y outer deathwall
+    WindBoundary = 0xB94B, // anchor, persistent outer deathwall; ARR player-center kills start at ~23y
     HurricaneVisual = 0xB94C,
     HurricaneKnockback = 0xB94D, // 5y away knockback
     RendingWindVisual = 0xB94E,
@@ -37,10 +37,17 @@ public enum AID : uint
 
 sealed class WindBoundary(BossModule module) : Components.GenericAOEs(module)
 {
-    private static readonly AOEShapeDonut Shape = new(19f, 30f);
-    private readonly AOEInstance[] _aoe = [new(Shape, module.Arena.Center)];
+    private static readonly AOEShapeDonut Visual = new(23f, 30f);
+    private static readonly AOEShapeDonut Forbidden = new(22f, 30f);
+    private readonly AOEInstance[] _aoe = [new(Visual, module.Arena.Center)];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+        => hints.AddForbiddenZone(Forbidden, Module.Arena.Center);
+
+    public override void DrawArenaBackground(int pcSlot, Actor pc)
+        => Arena.ZoneCircleOutlineUnclipped(Arena.Center, 23.5f, Colors.Danger, 2f);
 }
 
 sealed class KidnapperAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
@@ -57,11 +64,40 @@ sealed class KidnapperAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
         (uint)AID.GaleBlade => new(Half),
         (uint)AID.DispersingGales => new(Cone),
         (uint)AID.RendingWind => new(Rending),
-        (uint)AID.WindBloom => new(Bloom),
         (uint)AID.Downburst => new(Downburst, true),
         (uint)AID.CycloneRing => new(Ring),
         _ => null
     };
+}
+
+// 冰花: emitter 的 B953 cast 事件偶发缺失 (ARR 第 4 波无 cast), 依赖 cast 会漏画。
+// 直接从存活 emitter 实时画 13y 圈, 不依赖 cast 事件；但补真实 activation——
+// 2026-08-17 CE207 三案例修复：无 activation（DateTime.MinValue）被 RasterizeForbiddenZones 判 g=0
+// （"立即结算"最紧迫禁区），叠加 ThetaStar 时间窗对 g=0 格全封 → AI 禁区内逃逸被禁（站桩/双杀/圆内拉扯）。
+// 监听 emitter 的 WindBloom(0xB953) 读条，AOEInstance 带 CastFinishAt；读条缺失的 emitter 用默认（立即）。
+sealed class WindBloomAOEs(BossModule module) : Components.GenericAOEs(module)
+{
+    private static readonly AOEShapeCircle Shape = new(13f);
+    private readonly Dictionary<ulong, DateTime> _activation = []; // emitter InstanceID → 冰花读条结束时刻
+    private readonly List<AOEInstance> _displayed = [with(8)];
+
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
+    {
+        if (spell.Action.ID == (uint)AID.WindBloom && caster.OID == (uint)OID.Emitter)
+        {
+            _activation[caster.InstanceID] = Module.CastFinishAt(spell); // 覆盖旧值：同 emitter 多轮读条取最新
+        }
+    }
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
+    {
+        _displayed.Clear();
+        foreach (var emitter in Module.Enemies((uint)OID.Emitter))
+            if (!emitter.IsDeadOrDestroyed)
+                _displayed.Add(new(Shape, emitter.Position, activation: _activation.GetValueOrDefault(emitter.InstanceID), color: Colors.Danger, actorID: emitter.InstanceID,
+                    shapeDistance: Shape.Distance(emitter.Position, default)));
+        return CollectionsMarshal.AsSpan(_displayed);
+    }
 }
 
 // GenericKnockback only renders displacement and does not add an AI forbidden zone. The moving
@@ -102,8 +138,82 @@ sealed class HurricaneKnockbacks(BossModule module) : Components.GenericKnockbac
     }
 }
 
-// BC7A is the cast-bar telegraph for B950, whose action effect is a 24y SourceForward knockback.
-sealed class GustKnockback(BossModule module) : Components.SimpleKnockbacks(module, (uint)AID.GustTelegraph, 24f, shape: new AOEShapeRect(60f, 30f), kind: Kind.DirForward);
+// BC7A is the cast-bar telegraph for B950, whose action effect is a 24y directional knockback.
+// The gust comes from the wall on the main tank's side and flings everyone across the arena, so
+// the helper's cast rotation already encodes the true push direction; the tank only decides which
+// side the helper spawns on. Do not re-derive the direction from the tank's position - the helper
+// rotation is authoritative (and stays valid even when the tank is mid-arena, which will carry the
+// whole party out of bounds).
+sealed class GustKnockback(BossModule module) : Components.GenericKnockback(module)
+{
+    private static readonly AOEShapeRect Shape = new(60f, 30f);
+    private const float Distance = 24f;
+    private const float SafeRadius = 22f;
+    private const float LethalRadius = 23f;
+    private const float PreferredStartDistance = 20.5f;
+    private const float PreferredStartRadius = 2f;
+    // Replay event timing is consistently about 0.60s after the helper cast finishes. Using the
+    // old 1.05s estimate scheduled the safe-edge constraint roughly 0.4s after the real knockback.
+    private const double HitDelay = 0.60d;
+    private readonly List<Knockback> _casters = [with(2)];
+
+    public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor)
+    {
+        PruneExpired();
+        return CollectionsMarshal.AsSpan(_casters);
+    }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        foreach (var kb in _casters)
+        {
+            var displacement = Distance * kb.Direction.ToDirection();
+            var center = Arena.Center;
+            hints.AddForbiddenZone(new SDKnockbackInCircleFixedDirection(center, displacement, SafeRadius), kb.Activation);
+            var preferredStart = center - PreferredStartDistance * kb.Direction.ToDirection();
+            hints.GoalZones.Add(position => position.InCircle(preferredStart, PreferredStartRadius) ? 5f : 0f);
+        }
+    }
+
+    public override void AddHints(int slot, Actor actor, TextHints hints)
+    {
+        base.AddHints(slot, actor, hints);
+        if (_casters.Count == 0)
+            return;
+
+        var tank = Module.PrimaryActor?.TargetID is ulong id && id != 0 ? WorldState.Actors.Find(id) : null;
+        if (tank != null && !tank.IsDeadOrDestroyed && (tank.Position - Module.Arena.Center).Length() < 5f)
+            hints.Add("Main tank in the middle - the gust will push the whole party out of bounds!");
+    }
+
+    public override bool DestinationUnsafe(int slot, Actor actor, WPos pos) => !pos.InCircle(Arena.Center, LethalRadius);
+
+    public override void Update() => PruneExpired();
+
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
+    {
+        if (spell.Action.ID != (uint)AID.GustTelegraph || spell.EventHappened)
+            return;
+
+        _casters.RemoveAll(kb => kb.ActorID == caster.InstanceID);
+        _casters.Add(new(spell.LocXZ, Distance, Module.CastFinishAt(spell, HitDelay), Shape, spell.Rotation, Kind.DirForward, actorID: caster.InstanceID));
+    }
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
+    {
+        if (spell.Action.ID != (uint)AID.GustHit)
+            return;
+
+        _casters.Clear();
+        ++NumCasts;
+    }
+
+    private void PruneExpired()
+    {
+        var now = WorldState.CurrentTime;
+        _casters.RemoveAll(kb => now > kb.Activation.AddSeconds(1d));
+    }
+}
 // B94C resolves into the BBF8 helper raidwide about 0.9s after the boss cast. BC7A similarly
 // resolves into B950 while applying the directional knockback.
 sealed class KidnapperRaidwides(BossModule module) : Components.RaidwideCasts(module, [(uint)AID.HurricaneVisual, (uint)AID.GustTelegraph]);
@@ -115,6 +225,7 @@ sealed class IslandKidnapperStates : StateMachineBuilder
         TrivialPhase()
             .ActivateOnEnter<WindBoundary>()
             .ActivateOnEnter<KidnapperAOEs>()
+            .ActivateOnEnter<WindBloomAOEs>()
             .ActivateOnEnter<HurricaneHazards>()
             .ActivateOnEnter<HurricaneKnockbacks>()
             .ActivateOnEnter<GustKnockback>()
@@ -134,4 +245,4 @@ sealed class IslandKidnapperStates : StateMachineBuilder
     GroupID = 1093u,
     NameID = 61u,
     SortOrder = 6)]
-public sealed class IslandKidnapper(WorldState ws, Actor primary) : BossModule(ws, primary, new(-150f, -860f), new ArenaBoundsCircle(20f));
+public sealed class IslandKidnapper(WorldState ws, Actor primary) : BossModule(ws, primary, new(-150f, -860f), new ArenaBoundsCircle(23.5f));

@@ -87,7 +87,9 @@ public sealed class Plugin : IAsyncDalamudPlugin
             Service.Config.Initialize();
             Service.Config.LoadFromFile(_dalamud.ConfigFile);
 
-            _rotationDB = new(new(_dalamud.ConfigDirectory.FullName + "/autorot"), new(_dalamud.AssemblyLocation.DirectoryName! + "/DefaultRotationPresets.json"));
+            _rotationDB = new(new(_dalamud.ConfigDirectory.FullName + "/autorot"),
+                new(_dalamud.AssemblyLocation.DirectoryName! + "/RebornPresets.json"),
+                new(_dalamud.AssemblyLocation.DirectoryName! + "/DefaultRotationPresets.json"));
         }, cancellationToken);
 
         await Service.Framework.RunOnFrameworkThread(InitOnFrameworkThread);
@@ -214,6 +216,9 @@ public sealed class Plugin : IAsyncDalamudPlugin
                 break;
             case "TOGGLEANTICHEAT":
                 ToggleAnticheat();
+                break;
+            case "RADAR":
+                ToggleRadar(split);
                 break;
         }
     }
@@ -528,5 +533,32 @@ public sealed class Plugin : IAsyncDalamudPlugin
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
+    }
+
+    private static bool ToggleRadar(string[] messageData)
+    {
+        var config = Service.Config.Get<BossModuleConfig>();
+
+        if (messageData.Length == 1)
+            config.Enable = !config.Enable;
+        else
+        {
+            switch (messageData[1].ToUpperInvariant())
+            {
+                case "ON":
+                    config.Enable = true;
+                    break;
+                case "OFF":
+                    config.Enable = false;
+                    break;
+                default:
+                    Service.ChatGui.Print($"[BMR] Unknown radar command: {messageData[1]}");
+                    return false;
+            }
+        }
+
+        config.Modified.Fire();
+        Service.Log($"Radar is now {(config.Enable ? "enabled" : "disabled")}");
+        return true;
     }
 }

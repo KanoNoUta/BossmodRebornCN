@@ -1,12 +1,12 @@
 ﻿namespace BossMod;
 
-[ConfigDisplay(Name = "Automatic out-of-combat utility actions", Parent = typeof(ActionTweaksConfig), Order = -10, Tags = ["peloton"])]
+[ConfigDisplay(Name = "脱战实用技能自动使用", Parent = typeof(ActionTweaksConfig), Order = -10, Tags = ["peloton"])]
 class OutOfCombatActionsConfig : ConfigNode
 {
-    [PropertyDisplay("Enabled")]
+    [PropertyDisplay("启用")]
     public bool Enabled = false;
 
-    [PropertyDisplay("Auto use Peloton when moving out of combat")]
+    [PropertyDisplay("脱战移动时自动使用速行")]
     public bool AutoPeloton = false;
 }
 

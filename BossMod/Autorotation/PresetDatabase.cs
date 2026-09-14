@@ -24,7 +24,7 @@ public sealed class PresetDatabase
             for (var i = 0; i < countD; ++i)
             {
                 var def = DefaultPresets[i];
-                if (def.HiddenByDefault == _cfg.HideDefaultPresets || def.Name == "VBM Multibox")
+                if (def.HiddenByDefault == _cfg.HideDefaultPresets || def.Name == "VBM Multibox" || def.Name == "Movement Only")
                 {
                     presets.Add(def);
                 }
@@ -37,10 +37,12 @@ public sealed class PresetDatabase
         }
     }
 
-    public PresetDatabase(string rootPath, FileInfo defaultPresets)
+    public PresetDatabase(string rootPath, params FileInfo[] defaultPresets)
     {
         _dbPath = new(rootPath + ".db.json");
-        DefaultPresets = LoadPresetsFromFile(defaultPresets);
+        DefaultPresets = [];
+        foreach (var file in defaultPresets)
+            DefaultPresets.AddRange(LoadPresetsFromFile(file));
         UserPresets = LoadPresetsFromFile(_dbPath);
     }
 
