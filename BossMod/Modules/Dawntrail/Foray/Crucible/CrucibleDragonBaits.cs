@@ -7,7 +7,8 @@ sealed class CrucibleDragonBaits(BossModule module) : BossComponent(module)
 {
     private const uint PoisonOID = 0x1EB704;
     private const float RouteRadius = 18.3f; // Inside the 19.05y navigation boundary, including its 0.5y grid cells.
-    private static readonly Angle RouteStep = 2f * Angle.Asin(6.5f / (2f * RouteRadius)); // 6.5y between adjacent centers.
+    private static readonly Angle RouteSideStep = 2f * Angle.Asin(7f / (2f * RouteRadius)); // 7y between pools 1/2 and 3/4.
+    private static readonly Angle RouteMiddleHalfAngle = Angle.Asin(10f / (2f * RouteRadius)); // 10y between pools 2/3.
     private Actor? _source;
     private Actor? _target;
     private Actor? _previousTarget;
@@ -52,8 +53,11 @@ sealed class CrucibleDragonBaits(BossModule module) : BossComponent(module)
             _north = offset.Normalized();
         if (_route.Length == 0)
             _route = new WPos[4];
-        for (var i = 0; i < 4; ++i)
-            _route[i] = Module.Center + _north.Rotate((1.5f - i) * RouteStep) * RouteRadius;
+        // Keep every center on the edge arc. The R6 pools' inward intersection is ~5.46y from the aligned arena edge.
+        _route[0] = Module.Center + _north.Rotate(RouteMiddleHalfAngle + RouteSideStep) * RouteRadius;
+        _route[1] = Module.Center + _north.Rotate(RouteMiddleHalfAngle) * RouteRadius;
+        _route[2] = Module.Center + _north.Rotate(-RouteMiddleHalfAngle) * RouteRadius;
+        _route[3] = Module.Center + _north.Rotate(-RouteMiddleHalfAngle - RouteSideStep) * RouteRadius;
     }
 
     public override void OnTethered(Actor source, in ActorTetherInfo tether)
