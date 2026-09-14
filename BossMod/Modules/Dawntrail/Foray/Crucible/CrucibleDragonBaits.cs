@@ -6,9 +6,10 @@ namespace BossMod.Dawntrail.Foray.Crucible;
 sealed class CrucibleDragonBaits(BossModule module) : BossComponent(module)
 {
     private const uint PoisonOID = 0x1EB704;
-    private const float RouteRadius = 18.3f; // Inside the 19.05y navigation boundary, including its 0.5y grid cells.
-    private static readonly Angle RouteSideStep = 2f * Angle.Asin(7f / (2f * RouteRadius)); // 7y between pools 1/2 and 3/4.
-    private static readonly Angle RouteMiddleHalfAngle = Angle.Asin(10f / (2f * RouteRadius)); // 10y between pools 2/3.
+    private const float RouteRadius = 18.3f; // Keep pools 2/3 inside the 19.05y navigation boundary, including its 0.5y grid cells.
+    private const float RouteHalfWidth = 7f; // R6 pools with centers 14y apart leave a 2y corridor.
+    private const float RouteDepth = 7f; // 7y between pools 1/2 and 3/4.
+    private static readonly float RouteOuterOffset = MathF.Sqrt(RouteRadius * RouteRadius - RouteHalfWidth * RouteHalfWidth);
     private Actor? _source;
     private Actor? _target;
     private Actor? _previousTarget;
@@ -53,11 +54,14 @@ sealed class CrucibleDragonBaits(BossModule module) : BossComponent(module)
             _north = offset.Normalized();
         if (_route.Length == 0)
             _route = new WPos[4];
-        // Keep every center on the edge arc. The R6 pools' inward intersection is ~5.46y from the aligned arena edge.
-        _route[0] = Module.Center + _north.Rotate(RouteMiddleHalfAngle + RouteSideStep) * RouteRadius;
-        _route[1] = Module.Center + _north.Rotate(RouteMiddleHalfAngle) * RouteRadius;
-        _route[2] = Module.Center + _north.Rotate(-RouteMiddleHalfAngle) * RouteRadius;
-        _route[3] = Module.Center + _north.Rotate(-RouteMiddleHalfAngle - RouteSideStep) * RouteRadius;
+        // Form a rectangle with 2/3 near the edge and 1/4 one row toward the center.
+        var outer = Module.Center + _north * RouteOuterOffset;
+        var inner = outer - _north * RouteDepth;
+        var side = _north.OrthoL() * RouteHalfWidth;
+        _route[0] = inner + side;
+        _route[1] = outer + side;
+        _route[2] = outer - side;
+        _route[3] = inner - side;
     }
 
     public override void OnTethered(Actor source, in ActorTetherInfo tether)
