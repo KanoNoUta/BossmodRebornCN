@@ -478,6 +478,10 @@ public sealed class Plugin : IAsyncDalamudPlugin
         }
 
         var obj = GetActorObject(target);
+        if (obj == null)
+        {
+            return; // A stale request must not clear another plugin's or the player's current target.
+        }
 
         // 50 in-game units is the maximum distance before nameplates stop rendering (making the mob effectively untargetable)
         // targeting a mob that isn't visible is bad UX
@@ -529,25 +533,25 @@ public sealed class Plugin : IAsyncDalamudPlugin
         }
     }
 
-    private unsafe FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject* GetActorObject(Actor? actor)
+    private static unsafe FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject* GetActorObject(Actor? actor)
+        => FindActorObject(actor, FFXIVClientStructs.FFXIV.Client.Game.Object.GameObjectManager.Instance());
+
+    internal static unsafe FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject* FindActorObject(Actor? actor, FFXIVClientStructs.FFXIV.Client.Game.Object.GameObjectManager* manager)
     {
-        if (actor == null)
+        if (actor == null || actor.IsDestroyed || actor.InstanceID is 0 or 0xE0000000 || manager == null)
         {
             return null;
         }
 
-        var obj = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObjectManager.Instance()->Objects.IndexSorted[actor.SpawnIndex].Value;
-        if (obj == null)
+        var objects = manager->Objects.IndexSorted;
+        if ((uint)actor.SpawnIndex >= (uint)objects.Length)
         {
             return null;
         }
 
-        if (obj->EntityId != actor.InstanceID)
-        {
-            Service.Log($"[ExecHints] Unexpected actor: expected {actor.InstanceID:X} at #{actor.SpawnIndex}, but found {obj->EntityId:X}");
-        }
-
-        return obj;
+        // Object-table slots are reused. Never target or interact with the replacement occupant.
+        var obj = objects[actor.SpawnIndex].Value;
+        return obj != null && obj->EntityId == actor.InstanceID ? obj : null;
     }
 
     private void ParseAutorotationCommands(string[] cmd)

@@ -130,7 +130,9 @@ public sealed class AIHintsBuilder : IDisposable
 
         foreach (var actor in _ws.Actors.Actors.Values)
         {
-            if (!actor.IsTargetable || actor.IsAlly || actor.IsDead)
+            // Party membership must exclude us and our allies independently of native target classification.
+            // AutoDuty's Always-retarget preset will otherwise keep selecting the nearest candidate: ourselves.
+            if (!actor.IsTargetable || actor.IsAlly || actor.IsDeadOrDestroyed || _ws.Party.FindSlot(actor.InstanceID) >= 0)
             {
                 continue;
             }

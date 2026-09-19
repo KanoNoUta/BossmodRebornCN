@@ -67,6 +67,7 @@ sealed class XBMB03States : RecordedCrucibleStates
     {
         GroupPhase()
             .ActivateOnEnter<XBMB03AOE>()
+            .ActivateOnEnter<CrucibleVoidBlizzard>()
             .ActivateOnEnter<CrucibleVoidFlare>()
             .ActivateOnEnter<CrucibleVoidFlareHint>()
             .ActivateOnEnter<XBMB03Hint0>()
@@ -243,6 +244,7 @@ sealed class XBMB11States : RecordedCrucibleStates
         GroupPhase()
             .ActivateOnEnter<XBMB11AOE>()
             .ActivateOnEnter<CrucibleMinotaurSequence>()
+            .ActivateOnEnter<CrucibleMinotaurStomp>()
             .ActivateOnEnter<CrucibleMinotaurRotation>()
             .ActivateOnEnter<CrucibleMinotaurEnrageHint>()
             ;
@@ -338,6 +340,8 @@ sealed class XBMB10States : RecordedCrucibleStates
             .ActivateOnEnter<XBMB10AOE>()
             .ActivateOnEnter<CrucibleZombies>()
             .ActivateOnEnter<CrucibleNecromist>()
+            .ActivateOnEnter<CrucibleDeathDrive>()
+            .ActivateOnEnter<CrucibleNecromancerMarch>()
             .ActivateOnEnter<CrucibleNecromancerHint>()
             ;
     }
@@ -360,13 +364,17 @@ public sealed class XBMB10(WorldState ws, Actor primary) : RecordedCrucibleModul
 
 // 第 8 组（斗兽奇弈 第二盘）：奇子·牛头魔 + 奇子·冥鬼之眼[14548]
 [SkipLocalsInit]
-sealed class XBMB08States : StateMachineBuilder
+sealed class XBMB08States : RecordedCrucibleStates
 {
     public XBMB08States(BossModule module) : base(module)
     {
-        TrivialPhase()
+        GroupPhase()
             .ActivateOnEnter<XBMB08AOE>()
             .ActivateOnEnter<XBMB08Hint0>()
+            .ActivateOnEnter<CrucibleTaurusExplosions>()
+            .ActivateOnEnter<CrucibleTaurusDarkRay>()
+            .ActivateOnEnter<CrucibleTaurusGaze>()
+            .ActivateOnEnter<CrucibleTaurusStare>()
             ;
     }
 }
@@ -384,7 +392,7 @@ sealed class XBMB08States : StateMachineBuilder
     NameID = 14546u, // 奇子·牛头魔
     SortOrder = 8)]
 [SkipLocalsInit]
-public sealed class XBMB08(WorldState ws, Actor primary) : CrucibleModule(ws, primary, 14546u);
+public sealed class XBMB08(WorldState ws, Actor primary) : RecordedCrucibleModule(ws, primary, 14546u);
 
 // 第 13 组（斗兽奇弈 第二盘）：寻兽探奇 路斯福洛克斯 + 小地豆[14562]
 [SkipLocalsInit]
@@ -455,6 +463,7 @@ sealed class XBMB15States : RecordedCrucibleStates
             .ActivateOnEnter<XBMB15AOE>()
             .ActivateOnEnter<CrucibleYmirThunderHint>()
             .ActivateOnEnter<CrucibleYmirRocks>()
+            .ActivateOnEnter<CrucibleYmirTargets>()
             .ActivateOnEnter<CrucibleYmirTsunami>()
             .ActivateOnEnter<XBMB15Hint0>()
             .ActivateOnEnter<XBMB15Hint1>()
@@ -516,6 +525,7 @@ sealed class XBMB19States : RecordedCrucibleStates
         GroupPhase()
             .ActivateOnEnter<XBMB19AOE>()
             .ActivateOnEnter<CrucibleSirenSong>()
+            .ActivateOnEnter<CrucibleSirenExplosions>()
             .ActivateOnEnter<XBMB19Hint0>()
             ;
     }
@@ -578,6 +588,9 @@ sealed class XBMB21States : RecordedCrucibleStates
             .ActivateOnEnter<CrucibleGatlerTorrent>()
             .ActivateOnEnter<CrucibleGatlerExplosions>()
             .ActivateOnEnter<CrucibleGatlerTraps>()
+            .ActivateOnEnter<CrucibleGatlerBait>()
+            .ActivateOnEnter<CrucibleGatlerFireKnife>()
+            .ActivateOnEnter<CrucibleGatlerThunder>()
             .ActivateOnEnter<XBMB21Hint0>()
             ;
     }
@@ -609,6 +622,9 @@ sealed class XBMB30States : RecordedCrucibleStates
             .ActivateOnEnter<CrucibleMovingBombs>()
             .ActivateOnEnter<CrucibleBombPools>()
             .ActivateOnEnter<CrucibleBombMeltdown>()
+            .ActivateOnEnter<CrucibleBombMeltdownKnockback>()
+            .ActivateOnEnter<CrucibleBombFuryAOEs>()
+            .ActivateOnEnter<CrucibleBombFuryKnockback>()
             .ActivateOnEnter<CrucibleBombEnrageHint>()
             .ActivateOnEnter<XBMB30Hint0>()
             ;
