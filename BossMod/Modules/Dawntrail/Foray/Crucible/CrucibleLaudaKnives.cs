@@ -6,7 +6,7 @@ sealed class CrucibleLaudaShockwave(BossModule module) : Components.GenericKnock
 {
     private sealed class Mark(Angle facing, DateTime boundUntil)
     {
-        public readonly Angle Facing = facing;
+        public Angle Facing = facing;
         public DateTime BoundUntil = boundUntil, Activation;
         public bool? Forward;
         public int Side;
@@ -18,7 +18,16 @@ sealed class CrucibleLaudaShockwave(BossModule module) : Components.GenericKnock
     {
         base.OnStatusGain(actor, ref status);
         if (status.ID == 5555)
-            _marks[actor.InstanceID] = new(actor.Rotation, status.ExpireAt);
+        {
+            if (!_marks.TryGetValue(actor.InstanceID, out var mark))
+                _marks[actor.InstanceID] = new(actor.Rotation, status.ExpireAt);
+            else
+            {
+                // Native scans and queued status packets can arrive in either order.
+                if (mark.BoundUntil == default && mark.Forward == null) mark.Facing = actor.Rotation;
+                mark.BoundUntil = status.ExpireAt;
+            }
+        }
         else if (status.ID == 5341)
         {
             if (!_marks.TryGetValue(actor.InstanceID, out var mark))
@@ -45,7 +54,7 @@ sealed class CrucibleLaudaShockwave(BossModule module) : Components.GenericKnock
         {
             foreach (var (id, mark) in _marks)
                 if (WorldState.Actors.Find(id) is { } target && target.Position.InCircle(caster.Position, 1))
-                    mark.Forward = caster.Rotation.ToDirection().Dot(mark.Facing.ToDirection()) > 0;
+                    mark.Forward = spell.Rotation.ToDirection().Dot(mark.Facing.ToDirection()) > 0;
         }
         else if (spell.Action.ID == WatchedAction)
         {
@@ -59,13 +68,13 @@ sealed class CrucibleLaudaShockwave(BossModule module) : Components.GenericKnock
     {
         foreach (var (id, mark) in _marks.ToArray())
             if (WorldState.Actors.Find(id) is not { IsDeadOrDestroyed: false }
-                || (mark.Activation != default ? mark.Activation.AddSeconds(1) : mark.BoundUntil.AddSeconds(20)) < WorldState.CurrentTime)
+                || (mark.Activation != default ? mark.Activation < WorldState.CurrentTime.AddSeconds(-1) : mark.BoundUntil < WorldState.CurrentTime.AddSeconds(-20)))
                 _marks.Remove(id);
     }
 
     public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor)
     {
-        if (!_marks.TryGetValue(actor.InstanceID, out var mark) || mark.Activation == default || mark.Forward is not { } forward)
+        if (!_marks.TryGetValue(actor.InstanceID, out var mark) || mark.Activation == default || mark.Activation == DateTime.MaxValue || mark.Forward is not { } forward)
             return [];
         _source[0] = new(actor.Position, 40, mark.Activation, direction: actor.Rotation + (forward ? default : 180f.Degrees()), kind: Kind.DirForward, ignoreImmunes: true);
         return _source;
@@ -73,10 +82,15 @@ sealed class CrucibleLaudaShockwave(BossModule module) : Components.GenericKnock
 
     public override bool DestinationUnsafe(int slot, Actor actor, WPos pos) => !CrucibleLaudaFloor.Contains(pos);
 
+    private bool LandingUnsafe(int slot, Actor actor, WPos landing, DateTime activation)
+        => DestinationUnsafe(slot, actor, landing) || Module.Components.OfType<Components.GenericAOEs>().Any(c => c.ActiveAOEs(slot, actor).ToArray().Any(a => a.Risky && a.Check(landing) && (a.Activation == default || a.Activation >= activation.AddSeconds(-0.5) && a.Activation <= activation.AddSeconds(0.6))))
+            || Module.FindComponent<XBMB45AOE>() is { } aoes && aoes.ActiveAOEs(slot, actor).ToArray()
+                .Any(a => ResolvesAfterJump(actor, a.Activation) && a.Check(landing));
+
     // Navigation cannot represent a future teleport across an AOE. Keep the
     // later pattern on the overlay and assess it at the landing instead.
     public bool ResolvesAfterJump(Actor actor, DateTime activation) => _marks.TryGetValue(actor.InstanceID, out var mark)
-        && mark.Activation != default && mark.Forward != null
+        && mark.Activation != default && mark.Activation != DateTime.MaxValue && mark.Forward != null
         && activation > mark.Activation.AddSeconds(0.5) && activation <= mark.Activation.AddSeconds(4);
 
 
@@ -103,7 +117,7 @@ sealed class CrucibleLaudaShockwave(BossModule module) : Components.GenericKnock
             hints.ForcedMarchImminent = true;
             return;
         }
-        if (mark.Activation == default || mark.Forward is not { } forward)
+        if (mark.Activation == default || mark.Activation == DateTime.MaxValue || mark.Forward is not { } forward)
             return;
 
         // Starting 18y from center leaves the 40y landing on the opposite tip.
@@ -125,19 +139,26 @@ sealed class CrucibleLaudaShockwave(BossModule module) : Components.GenericKnock
         }
         mark.Side = Score(1) < Score(-1) ? 1 : -1;
         var goal = Module.Center + new WDir(0, mark.Side * 18);
-        var facing = new WDir(0, -mark.Side * (forward ? 1 : -1));
-        var remaining = (mark.Activation - WorldState.CurrentTime).TotalSeconds;
-        // Approach the final point along the required facing. A short real step
-        // also updates the server's movement/facing snapshot before standing still.
-        var waypoint = remaining > 4.5 ? goal - facing * 1.5f : goal;
-        hints.GoalZones.Add(p => Math.Max(0, 100 - (p - waypoint).Length() * 2));
-        hints.AddForbiddenZone(new SDInvertedCircle(waypoint, 0.6f), mark.Activation.AddSeconds(remaining > 4.5 ? -5 : -3.5));
+        var landing = Module.Center - new WDir(0, mark.Side * 22);
+        var waitingForEarlierHit = Module.FindComponent<XBMB45AOE>() is { } pendingAOEs
+            && pendingAOEs.ActiveAOEs(slot, actor).ToArray().Any(a => a.Activation < mark.Activation && a.Check(goal));
+        // ThetaStar has one deadline per cell and cannot plan to enter a circle
+        // after it expires. Stage close to the final point on currently clear
+        // floor, then enforce the standing pocket once the earlier hit resolves.
+        var stagingZones = waitingForEarlierHit ? hints.ForbiddenZones.ToArray() : [];
+        hints.GoalZones.Add(p => stagingZones.Any(z => z.shapeDistance.Distance(p) <= 0)
+            ? 0 : Math.Max(0, 100 - (p - goal).Length() * 2));
+        // Keep enough room for rasterization. The preceding R8 circles still
+        // cover this point, so use the actual knockback deadline.
+        if (!waitingForEarlierHit) hints.AddForbiddenZone(new SDInvertedCircle(goal, 2), mark.Activation);
         hints.MaxCastTime = 0;
-        if (remaining < 3.0 && actor.Position.InCircle(goal, 0.8f))
+        var direction = (landing - actor.Position).Normalized();
+        var actualLanding = actor.Position + direction * 40;
+        if (actor.Position.InCircle(goal, 2.0f) && !LandingUnsafe(slot, actor, actualLanding, mark.Activation))
         {
-            // ARR used the pre-turn server facing when turning only 1.2s before expiry.
-            // Establish it earlier and keep automatic actions from changing it.
-            hints.DesiredFacing = Angle.FromDirection(facing);
+            // Aim from the actual position. A 12-degree facing error moves a
+            // 40y landing almost 9y sideways and misses the narrow end platform.
+            hints.DesiredFacing = Angle.FromDirection(forward ? direction : -direction);
             hints.DesiredFacingExpire = mark.Activation.AddSeconds(0.5);
             hints.ForcedMarchImminent = true;
             hints.ForceCancelCast = true;

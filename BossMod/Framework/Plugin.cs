@@ -48,6 +48,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
     private TimeSpan _prevUpdateTime;
     private DateTime _throttleJump;
     private DateTime _throttleInteract;
+    private readonly TargetSelectionOnce _targetSelection = new(), _targetClearing = new();
     private DateTime _throttleFateSync;
     private DateTime _throttleLeaveDuty;
 
@@ -432,8 +433,10 @@ public sealed class Plugin : IAsyncDalamudPlugin
         _movementOverride.DesiredSpinDirection = _hints.SpinDirection;
 
         var targetSystem = FFXIVClientStructs.FFXIV.Client.Game.Control.TargetSystem.Instance();
-        SetTarget(_hints.ForcedTarget, &targetSystem->Target);
-        if (_hints.ClearTargetID != 0 && targetSystem->Target != null && targetSystem->Target->EntityId == _hints.ClearTargetID)
+        var forcedObject = SelectableTarget(_hints.ForcedTarget);
+        if (_targetSelection.Update(_hints.ForcedTarget?.InstanceID ?? 0, forcedObject != null))
+            targetSystem->Target = forcedObject;
+        if (_targetClearing.Update(_hints.ClearTargetID) && targetSystem->Target != null && targetSystem->Target->EntityId == _hints.ClearTargetID)
             targetSystem->Target = null;
         SetTarget(_hints.ForcedFocusTarget, &targetSystem->FocusTarget);
 
@@ -472,15 +475,21 @@ public sealed class Plugin : IAsyncDalamudPlugin
 
     private unsafe void SetTarget(Actor? target, FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject** targetPtr)
     {
+        var obj = SelectableTarget(target);
+        if (obj != null) *targetPtr = obj;
+    }
+
+    private unsafe FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject* SelectableTarget(Actor? target)
+    {
         if (target == null || !target.IsTargetable)
         {
-            return;
+            return null;
         }
 
         var obj = GetActorObject(target);
         if (obj == null)
         {
-            return; // A stale request must not clear another plugin's or the player's current target.
+            return null; // A stale request must not clear another plugin's or the player's current target.
         }
 
         // 50 in-game units is the maximum distance before nameplates stop rendering (making the mob effectively untargetable)
@@ -490,9 +499,10 @@ public sealed class Plugin : IAsyncDalamudPlugin
             var distSq = (player.PosRot.XYZ() - target.PosRot.XYZ()).LengthSquared();
             if (distSq < 2500f)
             {
-                *targetPtr = obj;
+                return obj;
             }
         }
+        return null;
     }
 
     private unsafe bool CheckInteractRange(Actor? player, Actor? target)
