@@ -48,7 +48,8 @@ public sealed class Plugin : IAsyncDalamudPlugin
     private TimeSpan _prevUpdateTime;
     private DateTime _throttleJump;
     private DateTime _throttleInteract;
-    private readonly TargetSelectionOnce _targetSelection = new(), _targetClearing = new();
+    private readonly TargetSelectionOnce _targetSelection = new();
+    private readonly MechanicTargetSelection _mechanicTargets = new();
     private DateTime _throttleFateSync;
     private DateTime _throttleLeaveDuty;
 
@@ -350,6 +351,8 @@ public sealed class Plugin : IAsyncDalamudPlugin
         _bossmod.Update();
         _zonemod.ActiveModule?.Update();
         _hintsBuilder.Update(_hints, PartyState.PlayerSlot, moveImminent);
+        _mechanicTargets.Apply(_hints, _bossmod.ActiveModule?.StateMachine.ActivePhase != null ? _bossmod.ActiveModule : null,
+            _ws.Party.Player(), CanSelectTarget);
         _amex.QueueManualActions();
         _rotation.Update(_amex.AnimationLockDelayEstimate, _movementOverride.IsMoving(), Service.Condition[ConditionFlag.DutyRecorderPlayback]);
         _ai.Update();
@@ -434,9 +437,10 @@ public sealed class Plugin : IAsyncDalamudPlugin
 
         var targetSystem = FFXIVClientStructs.FFXIV.Client.Game.Control.TargetSystem.Instance();
         var forcedObject = SelectableTarget(_hints.ForcedTarget);
-        if (_targetSelection.Update(_hints.ForcedTarget?.InstanceID ?? 0, forcedObject != null))
+        var targetChanged = _targetSelection.Update(_hints.ForcedTarget?.InstanceID ?? 0, forcedObject != null);
+        if (forcedObject != null && (_hints.PreserveTarget || targetChanged))
             targetSystem->Target = forcedObject;
-        if (_targetClearing.Update(_hints.ClearTargetID) && targetSystem->Target != null && targetSystem->Target->EntityId == _hints.ClearTargetID)
+        if (_hints.ClearTargetID != 0 && targetSystem->Target != null && targetSystem->Target->EntityId == _hints.ClearTargetID)
             targetSystem->Target = null;
         SetTarget(_hints.ForcedFocusTarget, &targetSystem->FocusTarget);
 
@@ -478,6 +482,8 @@ public sealed class Plugin : IAsyncDalamudPlugin
         var obj = SelectableTarget(target);
         if (obj != null) *targetPtr = obj;
     }
+
+    private unsafe bool CanSelectTarget(Actor target) => SelectableTarget(target) != null;
 
     private unsafe FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject* SelectableTarget(Actor? target)
     {

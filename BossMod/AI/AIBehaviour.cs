@@ -161,6 +161,9 @@ sealed class AIBehaviour(AIController ctrl, RotationModuleManager autorot, Prese
 
         // if we don't have a valid target yet, use some heuristics to select some 'ok' target to attack
         // try assisting master, otherwise (if player is own master, or if master has no valid target) just select closest valid target
+        if (target == null && autorot.Hints.PreserveTarget)
+            return default;
+
         if (target == null && master != player)
         {
             foreach (var t in autorot.Hints.PriorityTargets)

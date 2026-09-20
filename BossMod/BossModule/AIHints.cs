@@ -104,7 +104,18 @@ public sealed class AIHints
 
     // forced target
     // this should be set only if either explicitly planned by user or by ai, otherwise it will be annoying to user
-    public Actor? ForcedTarget;
+    public Actor? ForcedTarget
+    {
+        get;
+        set
+        {
+            if (!PreserveTarget)
+                field = value;
+        }
+    }
+    // A mechanic has already made its one-time selection; honor the current
+    // target (including a deliberate empty/friendly target) for this frame.
+    public bool PreserveTarget;
     public Actor? ForcedFocusTarget;
     // Explicitly drop this unsafe selected target; null ForcedTarget means "leave unchanged".
     public ulong ClearTargetID;
@@ -197,6 +208,7 @@ public sealed class AIHints
         PathfindMapObstacles = default;
         Array.Clear(Enemies);
         PotentialTargets.Clear();
+        PreserveTarget = false;
         ForcedTarget = null;
         ForcedFocusTarget = null;
         ClearTargetID = 0;

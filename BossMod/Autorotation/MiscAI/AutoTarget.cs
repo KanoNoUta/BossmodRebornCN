@@ -70,6 +70,9 @@ public sealed class AutoTarget(RotationModuleManager manager, Actor player) : Ro
             Hints.InteractWithTarget ??= World.Actors.Where(a => a.Type == ActorType.Treasure && a.IsTargetable && !a.IsOpenTreasure).OrderBy(a => (a.Position - Player.Position).LengthSq()).FirstOrDefault();
 
         var generalOpt = strategy.Option(Track.General);
+        if (Hints.PreserveTarget)
+            return;
+
         var generalStrategy = generalOpt.As<GeneralStrategy>();
         if (generalStrategy == GeneralStrategy.Passive)
             return;

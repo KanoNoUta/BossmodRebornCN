@@ -118,7 +118,8 @@ sealed class CrucibleGiantSlimes(BossModule module) : BossComponent(module)
             {
                 hints.SetPriority(attack, 10);
                 hints.ForcedTarget = attack;
-                hints.GoalZones.Add(AIHints.GoalSingleTarget(attack, 2.6f));
+                if (actor.TargetID == attack.InstanceID)
+                    hints.GoalZones.Add(AIHints.GoalSingleTarget(attack, 2.6f));
             }
             return;
         }

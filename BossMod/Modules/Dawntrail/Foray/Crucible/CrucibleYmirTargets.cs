@@ -12,12 +12,15 @@ sealed class CrucibleYmirTargets(BossModule module) : BossComponent(module)
     private bool CanAttack(Actor actor, uint required) => actor.OID == required && Alive(actor) && actor.IsTargetable
         && (actor.OID != 19603 || actor.FindStatus(2198u) == null);
 
+    private static bool Protected(Actor actor) => actor.OID == 19603 && actor.FindStatus(2198u) != null;
+
     public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
     {
         var required = RequiredOID;
         foreach (var enemy in hints.PotentialTargets)
             if (enemy.Actor.OID is 19603 or 19604 or 19605)
-                enemy.Priority = CanAttack(enemy.Actor, required) ? 10 : AIHints.Enemy.PriorityForbidden;
+                enemy.Priority = CanAttack(enemy.Actor, required) ? 10
+                    : Protected(enemy.Actor) ? AIHints.Enemy.PriorityForbidden : AIHints.Enemy.PriorityUndesirable;
 
         // This encounter explicitly requests target switching, including while
         // BMR only supplies movement for another rotation plugin.
@@ -26,10 +29,10 @@ sealed class CrucibleYmirTargets(BossModule module) : BossComponent(module)
             .ThenBy(a => (a.Position - actor.Position).LengthSq()).FirstOrDefault();
         if (selected != null)
             hints.ForcedTarget = selected;
-        if (WorldState.Actors.Find(actor.TargetID) is { OID: 19603 or 19604 or 19605 } current && !CanAttack(current, required))
+        if (WorldState.Actors.Find(actor.TargetID) is { } current && Protected(current))
             hints.ClearTargetID = current.InstanceID;
         if (actor.CastInfo is { } cast && WorldState.Actors.Find(cast.TargetID) is { OID: 19603 or 19604 or 19605 } castTarget
-            && !CanAttack(castTarget, required))
+            && Protected(castTarget))
             hints.ForceCancelCast = true;
     }
 
