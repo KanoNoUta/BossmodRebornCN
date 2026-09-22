@@ -2,9 +2,9 @@
   "Author": "KanoNoUta",
   "Name": "BossModReborn 斗兽版本",
   "InternalName": "BossModReborn",
-  "RepoUrl": "https://github.com/KanoNoUta/BossmodReborn",
+  "RepoUrl": "https://github.com/KanoNoUta/BossmodRebornCN",
   "Description": "支持斗兽自走棋部分线路",
-  "Changelog": "7.5.6.13：修复机制持续抢回小怪目标的问题；转火只选择一次，随后尊重手动换目标和清空目标；小怪死亡或新一波机制时继续正常转火，保留大眼危险阶段停手保护。",
+  "Changelog": "7.5.6.14：树精阶段取消小怪自动转火和优先击杀提示，保留手动选择及清空目标；继续保留树精脚下禁区、范围预警和避让。",
   "ApplicableVersion": "any",
   "Tags": [
     "combat",
@@ -29,5 +29,5 @@
     "https://raw.githubusercontent.com/FFXIV-CombatReborn/BossmodReborn/master/Data/image2.png",
     "https://raw.githubusercontent.com/FFXIV-CombatReborn/BossmodReborn/master/Data/image3.png"
   ],
-  "AssemblyVersion": "7.5.6.13"
+  "AssemblyVersion": "7.5.6.14"
 }
