@@ -70,7 +70,8 @@ sealed class ArenaChange(BossModule module) : Components.GenericAOEs(module)
         {
             Arena.Bounds = new ArenaBoundsCircle(25f); // default arena got no extra collision, just a donut aoe
             Arena.Center = Arena.Center.Quantized();
-            _aoe = [];
+            // The deathwall remains hazardous until the encounter ends.
+            _aoe = [new(donut, Arena.Center)];
         }
     }
 }
@@ -78,7 +79,34 @@ sealed class ArenaChange(BossModule module) : Components.GenericAOEs(module)
 sealed class BestialLoyalty(BossModule module) : Components.CastHint(module, (uint)AID.BestialLoyalty, "Summon crows");
 sealed class RunWild(BossModule module) : Components.CastInterruptHint(module, (uint)AID.RunWild, showNameInHint: true);
 sealed class HardBeak(BossModule module) : Components.SingleTargetCast(module, (uint)AID.HardBeak);
-sealed class Helldive(BossModule module) : Components.StackWithCastTargets(module, (uint)AID.Helldive, 6f, 8);
+sealed class Helldive(BossModule module) : Components.StackWithCastTargets(module, (uint)AID.Helldive, 6f, 8)
+{
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        base.AddAIHints(slot, actor, assignment, hints);
+        if (Raid.WithSlot().Length >= 2)
+            return;
+
+        // Solo participants can still share Helldive with players outside their party.
+        foreach (var stack in ActiveStacks)
+        {
+            if (stack.Target.IsDeadOrDestroyed || stack.ForbiddenPlayers[slot])
+                continue;
+            if (stack.Target != actor)
+            {
+                hints.AddForbiddenZone(new SDInvertedCircle(stack.Target.Position, stack.Radius), stack.Activation);
+                continue;
+            }
+
+            var candidates = new List<ShapeDistance>();
+            foreach (var player in WorldState.Actors)
+                if (player.Type == ActorType.Player && player != actor && !player.IsDeadOrDestroyed && Arena.InBounds(player.Position))
+                    candidates.Add(new SDInvertedCircle(player.Position, stack.Radius * 0.5f));
+            if (candidates.Count > 0)
+                hints.AddForbiddenZone(new SDIntersection([.. candidates]), stack.Activation);
+        }
+    }
+}
 sealed class BroadsideBarrage(BossModule module) : Components.SimpleAOEs(module, (uint)AID.BroadsideBarrage, new AOEShapeRect(40f, 20f));
 sealed class BlindsideBarrage(BossModule module) : Components.RaidwideCast(module, (uint)AID.BlindsideBarrage, "Raidwide + deathwall appears");
 sealed class RollingBarrage(BossModule module) : Components.SimpleAOEs(module, (uint)AID.RollingBarrageAOE, 8f);

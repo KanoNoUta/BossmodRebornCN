@@ -6,6 +6,7 @@ public enum OID : uint
     ImperialAssaultCraft = 0x2EE8, // R0.500, x22, also helper?
     Cavalry = 0x31C6, // R4.000, x9, and more spawn during fight
     FireShot = 0x1EB1D3, // R0.500, EventObj type, spawn during fight
+    ElectricFence = 0x1EB174,
     Helper = 0x233C
 }
 
@@ -48,8 +49,64 @@ sealed class StormSlash(BossModule module) : Components.SimpleAOEs(module, (uint
 sealed class MagitekBurst(BossModule module) : Components.SimpleAOEs(module, (uint)AID.MagitekBurst, 8f);
 sealed class BurnishedJoust(BossModule module) : Components.ChargeAOEs(module, (uint)AID.BurnishedJoust, 3f);
 
+sealed class ElectricFence(BossModule module) : Components.GenericAOEs(module)
+{
+    private static readonly AOEShapeDonut fence = new(CE53HereComesTheCavalry.SafeRadius, CE53HereComesTheCavalry.ArenaRadius);
+    private readonly List<Actor> _fences = module.Enemies((uint)OID.ElectricFence);
+    private readonly AOEInstance[] _aoe = [new(fence, module.Center)];
+
+    public bool Active => _fences.Any(f => !f.IsDestroyed);
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => Active ? _aoe : [];
+
+    public override void AddHints(int slot, Actor actor, TextHints hints) { }
+}
+
+abstract class CavalryKnockback(BossModule module, uint aid, float distance, bool ignoreImmunes)
+    : Components.SimpleKnockbacks(module, aid, distance, ignoreImmunes, 1, kind: Kind.DirForward)
+{
+    private readonly ElectricFence? _fence = module.FindComponent<ElectricFence>();
+
+    public override void AddHints(int slot, Actor actor, TextHints hints) { }
+
+    public override bool DestinationUnsafe(int slot, Actor actor, WPos pos)
+    {
+        if (base.DestinationUnsafe(slot, actor, pos) || _fence?.Active == true && !pos.InCircle(Arena.Center, CE53HereComesTheCavalry.SafeRadius))
+            return true;
+        foreach (var component in Module.Components)
+            if (component is Components.GenericAOEs aoes)
+                foreach (ref readonly var aoe in aoes.ActiveAOEs(slot, actor))
+                    if (aoe.Risky && aoe.Check(pos))
+                        return true;
+        return false;
+    }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        var radius = (_fence?.Active == true ? CE53HereComesTheCavalry.SafeRadius : CE53HereComesTheCavalry.ArenaRadius) - 1f;
+        foreach (ref readonly var kb in ActiveKnockbacks(slot, actor))
+        {
+            if (!kb.IgnoreImmunes && IsImmune(slot, kb.Activation))
+                continue;
+            var displacement = kb.Distance * kb.Direction.ToDirection();
+            List<ShapeDistance> forbidden = [new SDKnockbackInCircleFixedDirection(Arena.Center, displacement, radius)];
+            // Translate the landing hazards back to their corresponding starting positions.
+            // Include the persistent fire and the airstrikes resolving just after Ride Down.
+            foreach (var component in Module.Components)
+                if (component is Components.GenericAOEs aoes && component is not ElectricFence)
+                    foreach (ref readonly var aoe in aoes.ActiveAOEs(slot, actor))
+                        if (aoe.Risky && (component is FireShot || aoe.Activation == default || aoe.Activation >= kb.Activation))
+                            forbidden.Add(aoe.Shape.Distance(aoe.Origin - displacement, aoe.Rotation));
+            ShapeDistance zone = new SDUnion([.. forbidden]);
+            if (kb.Shape != null)
+                zone = new SDIntersection([kb.Shape.Distance(kb.Origin, kb.Direction), zone]);
+            hints.AddForbiddenZone(zone, kb.Activation);
+        }
+    }
+}
+
 // note: there are two casters, probably to avoid 32-target limit - we only want to show one
-sealed class GustSlash(BossModule module) : Components.SimpleKnockbacks(module, (uint)AID.GustSlashAOE, 35f, true, 1, null, Kind.DirForward);
+sealed class GustSlash(BossModule module) : CavalryKnockback(module, (uint)AID.GustSlashAOE, 35f, true);
 
 sealed class FireShot(BossModule module) : Components.VoidzoneAtCastTarget(module, 6f, (uint)AID.FireShot, GetVoidzones, default)
 {
@@ -76,30 +133,27 @@ sealed class AirborneExplosion(BossModule module) : Components.SimpleAOEs(module
 sealed class RideDownAOE(BossModule module) : Components.SimpleAOEs(module, (uint)AID.RideDown, new AOEShapeRect(60f, 5f));
 
 // note: there are two casters, probably to avoid 32-target limit - we only want to show one
-// TODO: generalize to reusable component
-sealed class RideDownKnockback(BossModule module) : Components.GenericKnockback(module, (uint)AID.RideDownAOE, 1)
+sealed class RideDownKnockback(BossModule module) : CavalryKnockback(module, (uint)AID.RideDownAOE, 12f, false)
 {
-    private readonly List<Knockback> _sources = [with(2)];
     private static readonly AOEShapeCone _shape = new(30f, 90f.Degrees());
-
-    public override ReadOnlySpan<Knockback> ActiveKnockbacks(int slot, Actor actor) => CollectionsMarshal.AsSpan(_sources);
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
         if (spell.Action.ID == WatchedAction)
         {
-            _sources.Clear();
+            Casters.Clear();
             var act = Module.CastFinishAt(spell);
             // charge always happens through center, so create two sources with origin at center looking orthogonally
-            _sources.Add(new(Arena.Center, 12f, act, _shape, spell.Rotation + 90f.Degrees(), Kind.DirForward, ignoreImmunes: true));
-            _sources.Add(new(Arena.Center, 12f, act, _shape, spell.Rotation - 90f.Degrees(), Kind.DirForward, ignoreImmunes: true));
+            // Unlike Gust Slash, Arms Length prevented this knockback in the replay.
+            Casters.Add(new(Arena.Center, Distance, act, _shape, spell.Rotation + 90f.Degrees(), Kind.DirForward));
+            Casters.Add(new(Arena.Center, Distance, act, _shape, spell.Rotation - 90f.Degrees(), Kind.DirForward));
         }
     }
 
     public override void OnCastFinished(Actor caster, ActorCastInfo spell)
     {
         if (spell.Action.ID == WatchedAction)
-            _sources.Clear();
+            Casters.Clear();
     }
 }
 
@@ -120,6 +174,7 @@ sealed class CE53HereComesTheCavalryStates : StateMachineBuilder
     public CE53HereComesTheCavalryStates(BossModule module) : base(module)
     {
         TrivialPhase()
+            .ActivateOnEnter<ElectricFence>()
             .ActivateOnEnter<StormSlash>()
             .ActivateOnEnter<MagitekBurst>()
             .ActivateOnEnter<BurnishedJoust>()
@@ -138,8 +193,11 @@ sealed class CE53HereComesTheCavalryStates : StateMachineBuilder
 }
 
 [ModuleInfo(BossModuleInfo.Maturity.Verified, Contributors = "Malediktus", GroupType = BossModuleInfo.GroupType.CriticalEngagement, GroupID = 778, NameID = 22)] // bnpcname=9929
-public sealed class CE53HereComesTheCavalry(WorldState ws, Actor primary) : BossModule(ws, primary, new(-750f, 790f), new ArenaBoundsCircle(25f))
+public sealed class CE53HereComesTheCavalry(WorldState ws, Actor primary) : BossModule(ws, primary, new(-750f, 790f), new ArenaBoundsCircle(ArenaRadius))
 {
+    public const float ArenaRadius = 30f;
+    public const float SafeRadius = 25f;
+
     protected override bool CheckPull() => PrimaryActor.InCombat && Raid.Player()!.Position.InCircle(Arena.Center, 25f); // not targetable at start
 
     protected override void DrawEnemies(int pcSlot, Actor pc)

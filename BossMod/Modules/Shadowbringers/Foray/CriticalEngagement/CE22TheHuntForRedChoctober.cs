@@ -79,11 +79,148 @@ sealed class ChocoMeteorStrike(BossModule module) : Components.Exaflare(module, 
     }
 }
 
-sealed class ChocoBeak1(BossModule module) : Components.SimpleAOEs(module, (uint)AID.ChocoBeak1, new AOEShapeRect(40f, 10f));
+sealed class ChocoBeak1(BossModule module) : Components.SimpleAOEs(module, (uint)AID.ChocoBeak1, new AOEShapeRect(40f, 10f))
+{
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        // Towers and the central charge resolve together. Do not use the charge lane
+        // as a shortcut between towers while it is still technically safe to cross.
+        var soaking = Module.FindComponent<ChocoComet>()?.Towers.Count > 0;
+        foreach (ref readonly var aoe in ActiveAOEs(slot, actor))
+            hints.AddForbiddenZone(aoe.ShapeDistance ?? aoe.Shape.Distance(aoe.Origin, aoe.Rotation), soaking ? default : aoe.Activation);
+    }
+}
 sealed class ChocoBeak2(BossModule module) : Components.SimpleAOEs(module, (uint)AID.ChocoBeak2, new AOEShapeRect(40f, 8f));
 sealed class ChocoSlash(BossModule module) : Components.SingleTargetCast(module, (uint)AID.ChocoSlash);
 sealed class ChocoMeteoruption(BossModule module) : Components.SimpleAOEs(module, (uint)AID.ChocoMeteoruption, 6f);
-sealed class ChocoComet(BossModule module) : Components.CastTowersOpenWorld(module, (uint)AID.ChocoComet, 5f);
+sealed class ChocoComet(BossModule module) : Components.CastTowersOpenWorld(module, (uint)AID.ChocoComet, 5f, maxSoakers: int.MaxValue)
+{
+    private readonly HashSet<Actor> _soakers = [];
+    private readonly Dictionary<ulong, Tower> _targets = [];
+
+    public override void Update()
+    {
+        if (Towers.Count == 0)
+        {
+            _soakers.Clear();
+            _targets.Clear();
+            return;
+        }
+        // Count live players, including non-party members and players who arrived
+        // after the towers spawned. More than one soaker does not fail this mechanic.
+        _soakers.Clear();
+        foreach (var actor in WorldState.Actors.Actors.Values)
+            if (actor.Type == ActorType.Player && !actor.IsDeadOrDestroyed)
+                _soakers.Add(actor);
+        foreach (var tower in Towers)
+            tower.AllowedSoakers = _soakers;
+    }
+
+    private int OtherSoakers(Tower tower, Actor actor)
+    {
+        var count = 0;
+        foreach (var soaker in _soakers)
+            if (soaker != actor && tower.IsInside(soaker))
+                ++count;
+        return count;
+    }
+
+    private WPos SafePosition(Tower tower) => tower.Position + (tower.Position - Arena.Center).Normalized() * 1.5f;
+
+    private bool SameSide(Tower tower, Actor actor)
+    {
+        if (Module.FindComponent<ChocoBeak1>() is { } charge)
+        {
+            foreach (ref readonly var aoe in charge.ActiveAOEs(0, actor))
+            {
+                var lateral = aoe.Rotation.ToDirection().OrthoL();
+                var side = (actor.Position - aoe.Origin).Dot(lateral);
+                if (Math.Abs(side) > 0.5f && side * (tower.Position - aoe.Origin).Dot(lateral) < 0f)
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    private Tower? SelectTower(Actor actor)
+    {
+        Tower? current = null;
+        foreach (var tower in Towers)
+        {
+            if (!tower.IsInside(actor))
+                continue;
+            current = tower;
+            // Do not turn one empty tower into another by abandoning our own.
+            if (OtherSoakers(tower, actor) == 0)
+                return tower;
+        }
+
+        bool CanFill(Tower tower) => OtherSoakers(tower, actor) == 0 && SameSide(tower, actor)
+            && (SafePosition(tower) - actor.Position).Length() / 6f + 0.75f < (tower.Activation - WorldState.CurrentTime).TotalSeconds;
+
+        if (_targets.TryGetValue(actor.InstanceID, out var target) && Towers.Contains(target) && CanFill(target))
+            return target;
+
+        Tower? empty = null;
+        var distance = float.MaxValue;
+        foreach (var tower in Towers)
+        {
+            if (!CanFill(tower))
+                continue;
+            var d = (SafePosition(tower) - actor.Position).LengthSq();
+            if (d < distance)
+            {
+                distance = d;
+                empty = tower;
+            }
+        }
+        if (empty != null || current != null)
+            return empty ?? current;
+
+        // If no empty tower is reachable in time, share a nearby tower rather than
+        // declaring every occupied tower dangerous and returning to the boss.
+        Tower? nearest = null;
+        distance = float.MaxValue;
+        foreach (var tower in Towers)
+        {
+            if (!SameSide(tower, actor))
+                continue;
+            var d = (SafePosition(tower) - actor.Position).LengthSq();
+            if (d < distance)
+            {
+                distance = d;
+                nearest = tower;
+            }
+        }
+        return nearest;
+    }
+
+    public override void AddHints(int slot, Actor actor, TextHints hints)
+    {
+        if (SelectTower(actor) is { } tower)
+            hints.Add(tower.IsInside(actor) ? "Stay in the tower until it resolves!" : OtherSoakers(tower, actor) == 0 ? "Soak an empty tower on your side!" : "Soak the tower!", !tower.IsInside(actor));
+    }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        if (SelectTower(actor) is not { } tower)
+            return;
+        _targets[actor.InstanceID] = tower;
+        // Keep a margin inside the tower and prefer its outer side, away from the
+        // central charge. Navigation still respects the other components' AOEs.
+        hints.AddForbiddenZone(new SDInvertedCircle(tower.Position, 4f), tower.Activation);
+        hints.GoalZones.Add(AIHints.GoalSingleTarget(SafePosition(tower), 1f, 100f));
+        BitMask soakers = default;
+        foreach (var member in Raid.WithSlot())
+            foreach (var active in Towers)
+                if (active.IsInside(member.Item2))
+                {
+                    soakers.Set(member.Item1);
+                    break;
+                }
+        hints.AddPredictedDamage(soakers, tower.Activation, DamageType);
+    }
+}
 sealed class ChocoMeteorain(BossModule module) : Components.SimpleAOEs(module, (uint)AID.ChocoMeteorain, 21f, 2);
 sealed class ChocoMeteorImpact(BossModule module) : Components.StackWithIcon(module, (uint)IconID.ChocoMeteorImpact, (uint)AID.ChocoMeteorImpact, 5f, 5.1f, 8);
 

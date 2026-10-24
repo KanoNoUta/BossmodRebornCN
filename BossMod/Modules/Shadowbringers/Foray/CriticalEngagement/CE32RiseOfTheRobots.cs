@@ -70,9 +70,8 @@ sealed class ArenaChange(BossModule module) : Components.GenericAOEs(module)
     {
         if (actor.OID == (uint)OID.Deathwall)
         {
-            Arena.Bounds = new ArenaBoundsCircle(25f); // default arena got no extra collision, just a donut aoe
-            Arena.Center = Arena.Center.Quantized();
-            _aoe = [];
+            // Keep the lethal electric grid visible without changing the physical arena boundary.
+            _aoe = [new(donut, Arena.Center)];
         }
     }
 }
@@ -311,6 +310,8 @@ sealed class CE32RiseOfTheRobotsStates : StateMachineBuilder
     public CE32RiseOfTheRobotsStates(BossModule module) : base(module)
     {
         TrivialPhase()
+            .OnEnter(((CE32RiseOfTheRobots)module).DisableAutomaticSprint)
+            .OnExit(((CE32RiseOfTheRobots)module).RestoreSprint)
             .ActivateOnEnter<ArenaChange>()
             .ActivateOnEnter<Incinerate>()
             .ActivateOnEnter<OrderTowers>()
@@ -324,6 +325,29 @@ public sealed class CE32RiseOfTheRobots(WorldState ws, Actor primary) : BossModu
 {
     public static readonly WPos ArenaCenter = new(104f, 237f);
     private static readonly ArenaBoundsCustom startingArena = new([new Polygon(ArenaCenter, 29.5f, 32)]);
+    private ActionDefinition? _sprint;
+    private ActionDefinition.ConditionDelegate? _previousSprintCondition;
+    private ActionDefinition.ConditionDelegate? _sprintCondition;
+
+    internal void DisableAutomaticSprint()
+    {
+        if (_sprint != null || ActionDefinitions.Instance[ActionDefinitions.IDSprint] is not { } sprint)
+            return;
+
+        // Sprint changes forced-march distance: prevent automatic use throughout the encounter, but allow manual input.
+        _sprint = sprint;
+        var previous = _previousSprintCondition = sprint.AllowExecute;
+        sprint.AllowExecute = _sprintCondition = (ws, player, action, hints)
+            => (action.Manual || !ReferenceEquals(ws, WorldState) || StateMachine.ActivePhase == null)
+                && (previous?.Invoke(ws, player, action, hints) ?? true);
+    }
+
+    internal void RestoreSprint()
+    {
+        if (_sprint != null && _sprint.AllowExecute == _sprintCondition)
+            _sprint.AllowExecute = _previousSprintCondition;
+        _sprint = null;
+    }
 
     protected override bool CheckPull() => base.CheckPull() && Raid.Player()!.Position.InCircle(Arena.Center, 30f);
 }

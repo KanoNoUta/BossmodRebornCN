@@ -43,6 +43,8 @@ sealed class ElectrifyingConduction(BossModule module) : Components.SingleTarget
 
 sealed class LightningRod(BossModule module) : Components.GenericTowers(module)
 {
+    private static bool CanSoak(Actor actor) => actor.Role == Role.Tank && actor.HPMP.CurHP * 10ul >= actor.HPMP.MaxHP * 9ul;
+
     public override ReadOnlySpan<Tower> ActiveTowers(int slot, Actor actor)
     {
         var towers = CollectionsMarshal.AsSpan(Towers);
@@ -89,7 +91,7 @@ sealed class LightningRod(BossModule module) : Components.GenericTowers(module)
         for (var i = 0; i < len; ++i)
         {
             ref readonly var p = ref party[i];
-            if (p.Item2.Role != Role.Tank && p.Item2.HPMP.CurHP < 40000u) // might lead to tanks sacrificing themselves, but oh well...
+            if (!CanSoak(p.Item2))
             {
                 forbidden.Set(p.Item1);
             }
@@ -101,6 +103,19 @@ sealed class LightningRod(BossModule module) : Components.GenericTowers(module)
             t.ForbiddenSoakers = forbidden;
         }
     }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        if (CanSoak(actor))
+        {
+            base.AddAIHints(slot, actor, assignment, hints);
+            return;
+        }
+        foreach (var tower in Towers)
+        {
+            hints.AddForbiddenZone(new SDCircle(tower.Position, 8f));
+        }
+    }
 }
 
 sealed class ElectrochemicalReaction(BossModule module) : Components.GenericAOEs(module)
@@ -108,7 +123,6 @@ sealed class ElectrochemicalReaction(BossModule module) : Components.GenericAOEs
     private readonly List<AOEInstance> _aoes = [with(2)];
     private static readonly AOEShapeRect rect = new(50f, 12.5f);
     private readonly List<(WPos position, int charges)> bartizans = [with(4)];
-    private readonly LightningRod _towers = module.FindComponent<LightningRod>()!;
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => CollectionsMarshal.AsSpan(_aoes);
 
@@ -156,18 +170,6 @@ sealed class ElectrochemicalReaction(BossModule module) : Components.GenericAOEs
         if (spell.Action.ID == (uint)AID.ElectrochemicalReaction)
         {
             _aoes.Clear();
-        }
-    }
-
-    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
-    {
-        if (_towers.Towers.Count != 0)
-        {
-            if (!_towers.Towers[0].ForbiddenSoakers[slot])
-            {
-                return;
-            }
-            base.AddAIHints(slot, actor, assignment, hints);
         }
     }
 }

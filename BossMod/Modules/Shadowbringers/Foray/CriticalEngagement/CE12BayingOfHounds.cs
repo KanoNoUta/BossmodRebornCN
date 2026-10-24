@@ -33,7 +33,19 @@ public enum AID : uint
 }
 
 sealed class Hellclaw(BossModule module) : Components.SingleTargetCast(module, (uint)AID.Hellclaw);
-sealed class TailBlow(BossModule module) : Components.SimpleAOEs(module, (uint)AID.TailBlow, new AOEShapeCone(19f, 45f.Degrees()));
+sealed class TailBlow(BossModule module) : Components.SimpleAOEs(module, (uint)AID.TailBlow, new AOEShapeCone(19f, 45f.Degrees()))
+{
+    public override void DrawArenaForeground(int pcSlot, Actor pc)
+    {
+        foreach (ref readonly var aoe in ActiveAOEs(pcSlot, pc))
+        {
+            // At the northern edge, most of the tail cone can be outside the arena.
+            // Outline the clipped area so the small remaining slice stays visible over the border.
+            var cone = (AOEShapeCone)aoe.Shape;
+            Arena.ZoneConeOutline(aoe.Origin, 0f, cone.Radius, aoe.Rotation + cone.DirectionOffset, cone.HalfAngle, Colors.Danger, 2f);
+        }
+    }
+}
 sealed class LavaSpit(BossModule module) : Components.SimpleAOEs(module, (uint)AID.LavaSpitAOE, 5f);
 sealed class ScorchingLash(BossModule module) : Components.SimpleAOEs(module, (uint)AID.ScorchingLash, new AOEShapeRect(50f, 5f));
 

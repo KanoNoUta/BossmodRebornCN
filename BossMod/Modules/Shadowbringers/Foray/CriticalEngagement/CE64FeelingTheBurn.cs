@@ -5,6 +5,7 @@ public enum OID : uint
     Boss = 0x31A0, // R3.64
     Escort1 = 0x31A1, // R2.8
     Escort2 = 0x32FD, // R2.8
+    ElectricFence = 0x1EB171,
     Helper = 0x233C
 }
 
@@ -43,6 +44,18 @@ public enum IconID : uint
     BallisticImpact = 261 // Helper
 }
 
+sealed class ElectricFence(BossModule module) : Components.GenericAOEs(module)
+{
+    // b2260yuka6_d.avfx: square electric floor from 20y to 25y on each axis.
+    private static readonly AOEShapeCustom fence = new(CE64FeelingTheBurn.ArenaCenter,
+        [new Rectangle(CE64FeelingTheBurn.ArenaCenter, CE64FeelingTheBurn.ArenaHalfSize, CE64FeelingTheBurn.ArenaHalfSize)],
+        [new Rectangle(CE64FeelingTheBurn.ArenaCenter, CE64FeelingTheBurn.SafeHalfSize, CE64FeelingTheBurn.SafeHalfSize)]);
+    private readonly List<Actor> _fences = module.Enemies((uint)OID.ElectricFence);
+    private readonly AOEInstance[] _aoe = [new(fence, module.Center)];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _fences.Any(f => !f.IsDestroyed) ? _aoe : [];
+}
+
 sealed class DiveFormation(BossModule module) : Components.SimpleAOEs(module, (uint)AID.DiveFormation, new AOEShapeRect(60f, 3f));
 
 sealed class AntiPersonnelMissile(BossModule module) : Components.GenericAOEs(module, (uint)AID.BallisticImpact)
@@ -78,9 +91,8 @@ sealed class ChainCannonEscort(BossModule module) : Components.GenericAOEs(modul
     private readonly List<Actor> _casters = [with(6)];
     public static readonly AOEShapeRect Rect = new(60f, 2.5f);
     private readonly List<AOEInstance> _aoes = [with(6)];
-    private DateTime activation;
-    private readonly List<Actor> participants = [];
-    private bool trackingactive;
+    private readonly Dictionary<ulong, ulong> _baitTargets = [];
+    private readonly Dictionary<ulong, WPos> _baitPositions = [];
 
     public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => CollectionsMarshal.AsSpan(_aoes);
 
@@ -109,28 +121,39 @@ sealed class ChainCannonEscort(BossModule module) : Components.GenericAOEs(modul
 
     public override void OnStatusGain(Actor actor, ref ActorStatus status)
     {
-        if (status.ID == (uint)SID.Tracking)
+        if (actor.OID == (uint)OID.Escort2 && status.ID == (uint)SID.Tracking
+            && actor.CastInfo?.Action.ID != (uint)AID.ChainCannonEscort && !_casters.Contains(actor))
         {
             _casters.Add(actor);
-            trackingactive = true;
-            if (activation == default)
-            {
-                activation = status.ExpireAt;
-            }
+            _baitTargets[actor.InstanceID] = actor.TargetID;
         }
+    }
+
+    public override void Update()
+    {
+        // TargetID returns to the guard's enmity target before Chain Cannon starts.
+        // Keep the player selected when Tracking was applied.
+        foreach (var caster in _casters)
+            if (_baitTargets.GetValueOrDefault(caster.InstanceID) == 0)
+                _baitTargets[caster.InstanceID] = caster.TargetID;
     }
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
         if (spell.Action.ID == (uint)AID.ChainCannonEscort)
         {
-            _casters.Clear();
+            _casters.Remove(caster);
+            _baitTargets.Remove(caster.InstanceID);
+            _baitPositions.Remove(caster.InstanceID);
             _aoes.Add(new(Rect, spell.LocXZ, spell.Rotation, Module.CastFinishAt(spell)));
         }
-        else if (spell.Action.ID == (uint)AID.SurfaceMissile)
-        {
-            trackingactive = false; // tracking stops 4-5 seconds before debuff disappears
-        }
+    }
+
+    public override void OnActorDestroyed(Actor actor)
+    {
+        _casters.Remove(actor);
+        _baitTargets.Remove(actor.InstanceID);
+        _baitPositions.Remove(actor.InstanceID);
     }
 
     public override void OnEventCast(Actor caster, ActorCastEvent spell)
@@ -164,24 +187,26 @@ sealed class ChainCannonEscort(BossModule module) : Components.GenericAOEs(modul
         for (var i = 0; i < count; ++i)
         {
             var caster = _casters[i];
-            if (!IsTrackingPlayer(caster, actor) || !trackingactive)
-                hints.AddForbiddenZone(Rect.Distance(caster.Position, caster.Rotation), activation);
-            else
+            // Moving previews stay visible, but only the bait target needs to move
+            // before the guard casts. Other players dodge the fixed cast AOE above.
+            if (_baitTargets.GetValueOrDefault(caster.InstanceID) == actor.InstanceID)
             {
-                var countP = participants.Count;
-                if (countP == 0)
+                if (!_baitPositions.TryGetValue(caster.InstanceID, out var destination))
                 {
-                    foreach (var a in Module.WorldState.Actors.Actors.Values)
-                        if (a.OID == default && a.Position.InSquare(Arena.Center, 24f))
-                            participants.Add(a);
-                }
-                for (var j = 0; j < countP; ++j)
-                {
-                    var a = participants[j];
-                    if (a == actor)
+                    var lateral = (caster.Position - Arena.Center).OrthoL();
+                    var scale = MathF.Max(MathF.Abs(lateral.X), MathF.Abs(lateral.Z));
+                    if (scale < 0.1f)
                         continue;
-                    hints.AddForbiddenZone(new SDCone(caster.Position, 60f, caster.AngleTo(a), Angle.Asin(Rect.HalfWidth / (a.Position - caster.Position).Length())), activation);
+                    // Choose one side perpendicular to the guard, 2y inside the
+                    // electric floor, and keep that side throughout the bait.
+                    lateral *= (CE64FeelingTheBurn.SafeHalfSize - 2f) / scale;
+                    var left = Arena.Center + lateral;
+                    var right = Arena.Center - lateral;
+                    destination = (left - actor.Position).LengthSq() <= (right - actor.Position).LengthSq() ? left : right;
+                    _baitPositions[caster.InstanceID] = destination;
                 }
+                hints.AddForbiddenZone(new SDInvertedCircle(destination, 1.5f));
+                hints.GoalZones.Add(AIHints.GoalSingleTarget(destination, 1f, 100f));
             }
         }
     }
@@ -228,6 +253,7 @@ sealed class CE64FeelingTheBurnStates : StateMachineBuilder
     public CE64FeelingTheBurnStates(BossModule module) : base(module)
     {
         TrivialPhase()
+            .ActivateOnEnter<ElectricFence>()
             .ActivateOnEnter<DiveFormation>()
             .ActivateOnEnter<AntiPersonnelMissile>()
             .ActivateOnEnter<ChainCannonEscort>()
@@ -240,8 +266,11 @@ sealed class CE64FeelingTheBurnStates : StateMachineBuilder
 }
 
 [ModuleInfo(BossModuleInfo.Maturity.Verified, GroupType = BossModuleInfo.GroupType.CriticalEngagement, GroupID = 778, NameID = 18)] // bnpcname=9945
-public sealed class CE64FeelingTheBurn(WorldState ws, Actor primary) : BossModule(ws, primary, new(-240f, -230f), new ArenaBoundsSquare(24f))
+public sealed class CE64FeelingTheBurn(WorldState ws, Actor primary) : BossModule(ws, primary, ArenaCenter, new ArenaBoundsSquare(ArenaHalfSize))
 {
+    public const float ArenaHalfSize = 25f, SafeHalfSize = 20f;
+    public static readonly WPos ArenaCenter = new(-240f, -230f);
+
     protected override void DrawEnemies(int pcSlot, Actor pc)
     {
         base.DrawEnemies(pcSlot, pc);
