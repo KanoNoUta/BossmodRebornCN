@@ -6,6 +6,7 @@ public enum OID : uint
     IceSprite = 0x319D, // R0.800, spawn during fight
     Icicle = 0x319E, // R3.000, spawn during fight
     Imaginifer = 0x319F, // R0.500, spawn during fight
+    ElectricFence = 0x1EB177,
     Helper = 0x233C
 }
 
@@ -45,15 +46,34 @@ public enum AID : uint
     ActivateImaginifer = 23623 // Imaginifer->self, no cast, single-target, visual
 }
 
+sealed class ElectricFence(BossModule module) : Components.GenericAOEs(module)
+{
+    // b2261yuka7_d.avfx: square ice floor between the 24y safe edge and the 30y outer edge.
+    private static readonly AOEShapeCustom fence = new(
+        [new Rectangle(CE54NeverCryWolf.ArenaCenter, CE54NeverCryWolf.ArenaHalfSize, CE54NeverCryWolf.ArenaHalfSize)],
+        [new Rectangle(CE54NeverCryWolf.ArenaCenter, CE54NeverCryWolf.SafeHalfSize, CE54NeverCryWolf.SafeHalfSize)]);
+    private readonly List<Actor> _fences = module.Enemies((uint)OID.ElectricFence);
+    private readonly AOEInstance[] _aoe = [new(fence, module.Center)];
+
+    public bool Active => _fences.Any(f => !f.IsDestroyed);
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => Active ? _aoe : [];
+}
+
 sealed class IcePillar(BossModule module) : Components.SimpleAOEs(module, (uint)AID.IcePillarAOE, 4f);
 sealed class PillarPierce(BossModule module) : Components.SimpleAOEs(module, (uint)AID.PillarPierce, new AOEShapeRect(80f, 2f));
 sealed class Shatter(BossModule module) : Components.SimpleAOEs(module, (uint)AID.Shatter, 8f);
 
 sealed class BracingWind(BossModule module) : Components.SimpleKnockbacks(module, (uint)AID.BracingWind, 40f, false, 1, new AOEShapeRect(60f, 6f), Kind.DirForward)
 {
+    private readonly ElectricFence? _fence = module.FindComponent<ElectricFence>();
+
+    public override bool DestinationUnsafe(int slot, Actor actor, WPos pos) => base.DestinationUnsafe(slot, actor, pos)
+        || _fence?.Active == true && !pos.InSquare(Arena.Center, CE54NeverCryWolf.SafeHalfSize);
+
     public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
     {
-        const float length = 24f * 2f; // casters are at the border, orthogonal to borders
+        const float length = CE54NeverCryWolf.SafeHalfSize * 2f; // casters are at the safe border, orthogonal to borders
         var count = Casters.Count;
         if (count == 0)
         {
@@ -107,16 +127,24 @@ sealed class ThermalGust(BossModule module) : Components.GenericAOEs(module)
 
     public override void OnActorCreated(Actor actor)
     {
-        if (actor.OID == (uint)OID.Imaginifer)
-            _aoes.Add(new(_shape, actor.Position.Quantized(), actor.Rotation, WorldState.FutureTime(6.5d)));
+        if (actor.OID == (uint)OID.Imaginifer && !_aoes.Any(a => a.ActorID == actor.InstanceID))
+            _aoes.Add(new(_shape, actor.Position.Quantized(), actor.Rotation, WorldState.FutureTime(6.5d), actorID: actor.InstanceID));
+    }
 
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
+    {
+        // Resync can report a cast without its earlier spawn prediction.
+        if (spell.Action.ID == (uint)AID.ThermalGust && !_aoes.Any(a => a.ActorID == caster.InstanceID))
+            _aoes.Add(new(_shape, spell.LocXZ, spell.Rotation, Module.CastFinishAt(spell), actorID: caster.InstanceID));
     }
 
     public override void OnCastFinished(Actor caster, ActorCastInfo spell)
     {
         if (spell.Action.ID == (uint)AID.ThermalGust)
-            _aoes.RemoveAt(0);
+            _aoes.RemoveAll(a => a.ActorID == caster.InstanceID);
     }
+
+    public override void OnActorDestroyed(Actor actor) => _aoes.RemoveAll(a => a.ActorID == actor.InstanceID);
 }
 
 sealed class AgeOfEndlessFrost(BossModule module) : Components.GenericRotatingAOE(module)
@@ -177,6 +205,7 @@ sealed class CE54NeverCryWolfStates : StateMachineBuilder
     public CE54NeverCryWolfStates(BossModule module) : base(module)
     {
         TrivialPhase()
+            .ActivateOnEnter<ElectricFence>()
             .ActivateOnEnter<IcePillar>()
             .ActivateOnEnter<PillarPierce>()
             .ActivateOnEnter<Shatter>()
@@ -192,13 +221,17 @@ sealed class CE54NeverCryWolfStates : StateMachineBuilder
 }
 
 [ModuleInfo(BossModuleInfo.Maturity.Verified, Contributors = "Malediktus", GroupType = BossModuleInfo.GroupType.CriticalEngagement, GroupID = 778, NameID = 25)] // bnpcname=9941
-public sealed class CE54NeverCryWolf(WorldState ws, Actor primary) : BossModule(ws, primary, new(-830f, 190f), new ArenaBoundsSquare(24f))
+public sealed class CE54NeverCryWolf(WorldState ws, Actor primary) : BossModule(ws, primary, ArenaCenter, new ArenaBoundsSquare(ArenaHalfSize))
 {
+    public const float ArenaHalfSize = 30f;
+    public const float SafeHalfSize = 24f;
+    public static readonly WPos ArenaCenter = new(-830f, 190f);
+
     protected override void DrawEnemies(int pcSlot, Actor pc)
     {
         base.DrawEnemies(pcSlot, pc);
         Arena.Actors(Enemies((uint)OID.Imaginifer));
     }
 
-    protected override bool CheckPull() => base.CheckPull() && Raid.Player()!.Position.InSquare(Arena.Center, 24f);
+    protected override bool CheckPull() => base.CheckPull() && Raid.Player()!.Position.InSquare(Arena.Center, SafeHalfSize);
 }

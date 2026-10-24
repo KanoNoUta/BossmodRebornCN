@@ -105,7 +105,61 @@ sealed class DeadLeaves(BossModule module) : Components.GenericAOEs(module, defa
 
 sealed class AnaphylacticShock(BossModule module) : Components.SimpleAOEs(module, (uint)AID.AnaphylacticShock, new AOEShapeRect(30f, 1f));
 sealed class SplashBomb(BossModule module) : Components.SimpleAOEs(module, (uint)AID.SplashBombAOE, 6f);
-sealed class SplashGrenade(BossModule module) : Components.StackWithCastTargets(module, (uint)AID.SplashGrenadeAOE, 6f, 8);
+sealed class SplashGrenade(BossModule module) : Components.StackWithCastTargets(module, (uint)AID.SplashGrenadeAOE, 6f, 8)
+{
+    public override void AddHints(int slot, Actor actor, TextHints hints)
+    {
+        foreach (var stack in ActiveStacks)
+        {
+            var count = 0;
+            foreach (var player in WorldState.Actors)
+                if (IsParticipant(player) && stack.IsInside(player))
+                    ++count;
+            hints.Add("参与飞溅榴弹分摊！", !stack.IsInside(actor) || count < stack.MinSize);
+        }
+    }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        foreach (var stack in ActiveStacks)
+        {
+            var position = stack.Target.Position;
+            if (stack.Target == actor)
+            {
+                // CE participants need not be in our party. Bring our marker to the largest nearby group.
+                Actor? best = null;
+                var bestCount = 0;
+                var bestDistance = float.MaxValue;
+                foreach (var player in WorldState.Actors)
+                {
+                    if (player == actor || !IsParticipant(player))
+                        continue;
+                    var count = 0;
+                    foreach (var other in WorldState.Actors)
+                        if (other != actor && IsParticipant(other) && other.Position.InCircle(player.Position, StackRadius - 1f))
+                            ++count;
+                    var distance = (player.Position - actor.Position).LengthSq();
+                    if (count > bestCount || count == bestCount && distance < bestDistance)
+                    {
+                        best = player;
+                        bestCount = count;
+                        bestDistance = distance;
+                    }
+                }
+                if (best == null)
+                    continue;
+                position = best.Position;
+            }
+
+            // Gather as soon as the marker appears, ahead of uptime goals, with a margin inside the 6y stack.
+            // Keep the real deadline so other active AOEs still have to be avoided on the way.
+            hints.AddForbiddenZone(new SDInvertedCircle(position, StackRadius - 1f), stack.Activation);
+            hints.GoalZones.Add(AIHints.GoalSingleTarget(position, StackRadius - 1f, 100f));
+        }
+    }
+
+    private bool IsParticipant(Actor actor) => actor.Type == ActorType.Player && !actor.IsDeadOrDestroyed && Arena.InBounds(actor.Position);
+}
 sealed class PlayfulBreeze(BossModule module) : Components.RaidwideCast(module, (uint)AID.PlayfulBreeze);
 sealed class Budbutt(BossModule module) : Components.SingleTargetCast(module, (uint)AID.Budbutt);
 

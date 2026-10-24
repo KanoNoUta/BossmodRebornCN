@@ -4,6 +4,7 @@ public enum OID : uint
 {
     Boss = 0x319A, // R6.000, x1
     EmbitteredSoul = 0x319B, // R3.600, spawn during fight
+    ElectricFence = 0x1EB176,
     Helper = 0x233C
 }
 
@@ -32,6 +33,18 @@ public enum AID : uint
     TragicalGaze = 23573, // EmbitteredSoul->self, 7.5s cast, range 55 circle
 }
 
+sealed class ElectricFence(BossModule module) : Components.GenericAOEs(module)
+{
+    // Same b2257yuka3_d.avfx electric floor as CE53, between the 25y safe edge and the 30y arena edge.
+    private static readonly AOEShapeDonut fence = new(CE51ThereWouldBeBlood.SafeRadius, CE51ThereWouldBeBlood.ArenaRadius);
+    private readonly List<Actor> _fences = module.Enemies((uint)OID.ElectricFence);
+    private readonly AOEInstance[] _aoe = [new(fence, module.Center)];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _fences.Any(f => !f.IsDestroyed) ? _aoe : [];
+
+    public override void AddHints(int slot, Actor actor, TextHints hints) { }
+}
+
 sealed class CloudOfLocusts(BossModule module) : Components.SimpleAOEs(module, (uint)AID.CloudOfLocusts, 15f);
 sealed class PlagueOfLocusts(BossModule module) : Components.SimpleAOEs(module, (uint)AID.PlagueOfLocusts, new AOEShapeDonut(6f, 40f));
 sealed class DivestingGale(BossModule module) : Components.SimpleAOEs(module, (uint)AID.DivestingGale, 5f);
@@ -48,6 +61,7 @@ sealed class CE51ThereWouldBeBloodStates : StateMachineBuilder
     public CE51ThereWouldBeBloodStates(BossModule module) : base(module)
     {
         TrivialPhase()
+            .ActivateOnEnter<ElectricFence>()
             .ActivateOnEnter<CloudOfLocusts>()
             .ActivateOnEnter<PlagueOfLocusts>()
             .ActivateOnEnter<DivestingGale>()
@@ -62,7 +76,10 @@ sealed class CE51ThereWouldBeBloodStates : StateMachineBuilder
 }
 
 [ModuleInfo(BossModuleInfo.Maturity.Verified, GroupType = BossModuleInfo.GroupType.CriticalEngagement, GroupID = 778, NameID = 24)] // bnpcname=10064
-public sealed class CE51ThereWouldBeBlood(WorldState ws, Actor primary) : BossModule(ws, primary, new(-390f, 230f), new ArenaBoundsCircle(25f))
+public sealed class CE51ThereWouldBeBlood(WorldState ws, Actor primary) : BossModule(ws, primary, new(-390f, 230f), new ArenaBoundsCircle(ArenaRadius))
 {
-    protected override bool CheckPull() => base.CheckPull() && Raid.Player()!.Position.InCircle(Arena.Center, 25f);
+    public const float ArenaRadius = 30f;
+    public const float SafeRadius = 25f;
+
+    protected override bool CheckPull() => base.CheckPull() && Raid.Player()!.Position.InCircle(Arena.Center, SafeRadius);
 }

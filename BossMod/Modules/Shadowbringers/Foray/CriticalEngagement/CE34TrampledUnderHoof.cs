@@ -52,9 +52,8 @@ sealed class ArenaChange(BossModule module) : Components.GenericAOEs(module)
     {
         if (actor.OID == (uint)OID.Deathwall)
         {
-            Arena.Bounds = new ArenaBoundsCircle(20f); // default arena got no extra collision, just a donut aoe
-            Arena.Center = Arena.Center.Quantized();
-            _aoe = [];
+            // The damaging ring persists without changing the arena boundary.
+            _aoe = [new(donut, Arena.Center)];
         }
     }
 }

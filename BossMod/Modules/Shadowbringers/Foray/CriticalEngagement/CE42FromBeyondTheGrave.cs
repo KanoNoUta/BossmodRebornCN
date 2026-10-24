@@ -56,65 +56,187 @@ public enum AID : uint
 
 public enum SID : uint
 {
+    Doom = 1970,
     ForwardMarch = 2161, // Boss->player, extra=0x0
     AboutFace = 2162, // Boss->player, extra=0x0
     LeftFace = 2163, // Boss->player, extra=0x0
     RightFace = 2164 // Boss->player, extra=0x0
 }
 
-class ArenaChange(BossModule module) : Components.GenericAOEs(module)
+sealed class ElectricFence(BossModule module) : Components.GenericAOEs(module)
 {
-    private static readonly AOEShapeDonut donut = new(25f, 30f);
-    private AOEInstance[] _aoe = [];
+    // Like CE53/CE62: retain the outer boundary and draw the persistent lethal floor inside it.
+    private static readonly AOEShapeDonut fence = new(CE42FromBeyondTheGrave.SafeRadius, CE42FromBeyondTheGrave.ArenaRadius);
+    private readonly List<Actor> _fences = module.Enemies((uint)OID.Deathwall);
+    private readonly AOEInstance[] _aoe = [new(fence, module.Center)];
+    private DateTime _activation;
 
-    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _aoe;
+    public bool Active => _fences.Any(f => !f.IsDestroyed);
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
+    {
+        if (!Active && _activation == default)
+            return [];
+        _aoe[0].Activation = Active ? default : _activation;
+        return _aoe;
+    }
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
-        if (spell.Action.ID == (uint)AID.GallowsMarch && Arena.Bounds.Radius > 25f)
-        {
-            _aoe = [new(donut, Arena.Center, default, Module.CastFinishAt(spell, 0.8d))];
-        }
+        if (spell.Action.ID == (uint)AID.GallowsMarch && !Active)
+            _activation = Module.CastFinishAt(spell, 0.9d);
     }
 
-    public override void OnActorCreated(Actor actor)
+    public override void OnActorDestroyed(Actor actor)
     {
         if (actor.OID == (uint)OID.Deathwall)
-        {
-            Arena.Bounds = new ArenaBoundsCircle(25f); // default arena got no extra collision, just a donut aoe
-            Arena.Center = Arena.Center.Quantized();
-            _aoe = [];
-        }
+            _activation = default;
     }
+
+    public override void AddHints(int slot, Actor actor, TextHints hints) { }
 }
 
 class DevourSoul(BossModule module) : Components.SingleTargetCast(module, (uint)AID.DevourSoul);
 class Blight(BossModule module) : Components.RaidwideCast(module, (uint)AID.Blight);
 
-class GallowsMarch(BossModule module) : Components.StatusDrivenForcedMarch(module, 3f, (uint)SID.ForwardMarch, (uint)SID.AboutFace, (uint)SID.LeftFace, (uint)SID.RightFace)
+sealed class GallowsMarch : Components.StatusDrivenForcedMarch
 {
-    private readonly PurifyingLight _aoe = module.FindComponent<PurifyingLight>()!;
+    private readonly PurifyingLight _light;
+    private readonly List<Actor> _spheres;
+    private ShapeDistance[] _marchZones = [];
+    private Angle _direction;
+    private Angle _facing;
+    private DateTime _activation;
+    private ulong _plannedActor;
+
+    public GallowsMarch(BossModule module) : base(module, 3f, (uint)SID.ForwardMarch, (uint)SID.AboutFace, (uint)SID.LeftFace, (uint)SID.RightFace)
+    {
+        // Both replay marches last 3s and travel about 18y, not the shared 6.6y/s default.
+        MovementSpeed = 6f;
+        _light = module.FindComponent<PurifyingLight>()!;
+        _spheres = module.Enemies((uint)OID.ShockSphere);
+    }
 
     public override bool DestinationUnsafe(int slot, Actor actor, WPos pos)
     {
-        var aoes = _aoe.ActiveAOEs(slot, actor);
-        var len = aoes.Length;
-        for (var i = 0; i < len; ++i)
-        {
-            ref readonly var aoe = ref aoes[i];
-            if (!aoe.Check(pos))
-            {
-                return true;
-            }
-        }
-        return false;
+        if (!pos.InCircle(Arena.Center, CE42FromBeyondTheGrave.SafeRadius) || _spheres.Any(s => !s.IsDeadOrDestroyed && pos.InCircle(s.Position, 7f)))
+            return true;
+        var aoes = _light.ActiveAOEs(slot, actor);
+        return aoes.Length != 0 && !aoes[0].Check(pos);
     }
 
-    public override void AddGlobalHints(GlobalHints hints)
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
     {
-        if (Module.PrimaryActor.CastInfo?.IsSpell(AID.GallowsMarch) ?? false)
-            hints.Add("Apply doom & march debuffs");
+        var aoes = _light.ActiveAOEs(slot, actor);
+        if (actor.IsDeadOrDestroyed || aoes.Length == 0)
+            return;
+        ref readonly var light = ref aoes[0];
+        var state = State.GetValueOrDefault(actor.InstanceID);
+        if (state == null || state.PendingMoves.Count == 0)
+        {
+            // March ends ~0.7s before the cleansing hit: stay inside until it actually resolves.
+            if (state?.ForcedEnd > WorldState.CurrentTime)
+            {
+                hints.DesiredFacing = actor.Rotation;
+                hints.DesiredFacingExpire = WorldState.FutureTime(0.5d);
+                hints.ForcedMarchImminent = true;
+                hints.ForceCancelCast = true;
+            }
+            else if (_plannedActor == actor.InstanceID && _activation != default && WorldState.CurrentTime < _activation.AddSeconds(0.3d))
+            {
+                // Directional status loss precedes status 1257 by one replay frame.
+                hints.DesiredFacing = _facing;
+                hints.DesiredFacingExpire = WorldState.FutureTime(0.5d);
+                hints.ForcedMarchImminent = true;
+                hints.ForceCancelCast = true;
+            }
+            else if (actor.FindStatus((uint)SID.Doom) != null)
+                hints.AddForbiddenZone(new SDInvertedCircle(light.Origin, PurifyingLight.Radius - 1f), light.Activation);
+            return;
+        }
+
+        var move = state.PendingMoves[0];
+        var distance = MovementSpeed * move.duration;
+        if (_activation != move.activation || _plannedActor != actor.InstanceID)
+        {
+            _marchZones = [];
+            if (!PrepareMarch(actor, light.Origin, distance))
+                return;
+            _activation = move.activation;
+            _plannedActor = actor.InstanceID;
+        }
+        foreach (var zone in _marchZones)
+            hints.AddForbiddenZone(zone, move.activation);
+
+        // Reuse CE32/Brainstorm's prepositioning + forbidden-facing sector. Fixed-direction
+        // circle projections and capsules also exclude paths through the shock spheres.
+        var facing = _facing = (_direction - move.dir).Normalized();
+        hints.ForbiddenDirections.Add(((facing + 180f.Degrees()).Normalized(), 175f.Degrees(), move.activation));
+        if (move.activation <= WorldState.FutureTime(0.5d) && !_marchZones.Any(z => z.Contains(actor.Position)))
+        {
+            // The existing lock prevents autoattacks/instant actions undoing the final facing.
+            hints.DesiredFacing = facing;
+            hints.DesiredFacingExpire = WorldState.FutureTime(0.5d);
+            hints.ForcedMarchImminent = true;
+            hints.ForceCancelCast = true;
+        }
     }
+
+    private bool PrepareMarch(Actor actor, WPos light, float distance)
+    {
+        // As in Brainstorm, search in 5-degree steps. Prefer turning in place; if the
+        // player is too close to the center, find the nearest viable staging position.
+        var preferred = Angle.FromDirection(light - actor.Position);
+        bool TryDirection(WPos start, out Angle direction)
+        {
+            for (var i = 0; i < 72; ++i)
+            {
+                direction = preferred + (i * 5f).Degrees();
+                var dir = direction.ToDirection();
+                var end = start + dir * distance;
+                if (!start.InCircle(Arena.Center, CE42FromBeyondTheGrave.SafeRadius - 1f)
+                    || !end.InCircle(Arena.Center, CE42FromBeyondTheGrave.SafeRadius - 1f)
+                    || !end.InCircle(light, PurifyingLight.Radius - 2f))
+                    continue;
+                if (!_spheres.Any(s => !s.IsDeadOrDestroyed && Intersect.RayCircle(start - s.Position, dir, 9f, distance)))
+                    return true;
+            }
+            direction = default;
+            return false;
+        }
+
+        if (!TryDirection(actor.Position, out _direction))
+        {
+            var best = float.MaxValue;
+            for (var x = -24f; x <= 24f; x += 2f)
+                for (var z = -24f; z <= 24f; z += 2f)
+                {
+                    var start = Arena.Center + new WDir(x, z);
+                    var cost = (start - actor.Position).LengthSq();
+                    if (cost < best && TryDirection(start, out var direction))
+                    {
+                        best = cost;
+                        _direction = direction;
+                    }
+                }
+            if (best == float.MaxValue)
+                return false;
+        }
+
+        var displacement = _direction.ToDirection() * distance;
+        var zones = new List<ShapeDistance>
+        {
+            new SDInvertedCircle(light - displacement, PurifyingLight.Radius - 2f),
+            new SDInvertedCircle(Arena.Center - displacement, CE42FromBeyondTheGrave.SafeRadius - 1f)
+        };
+        foreach (var sphere in _spheres)
+            if (!sphere.IsDeadOrDestroyed)
+                zones.Add(new SDCapsule(sphere.Position, -_direction.ToDirection(), distance, 9f));
+        _marchZones = [.. zones];
+        return true;
+    }
+
+    public override void AddHints(int slot, Actor actor, TextHints hints) { }
 }
 
 class ShockSphere(BossModule module) : Components.Voidzone(module, 7f, GetSpheres)
@@ -189,7 +311,60 @@ class SoulPurge(BossModule module) : Components.GenericAOEs(module)
 
 class CrimsonBlade(BossModule module) : Components.SimpleAOEs(module, (uint)AID.CrimsonBlade, new AOEShapeCone(50f, 90f.Degrees()));
 class BloodCyclone(BossModule module) : Components.SimpleAOEs(module, (uint)AID.BloodCyclone, 5f);
-class Aethertide(BossModule module) : Components.SpreadFromCastTargets(module, (uint)AID.AethertideAOE, 8f);
+sealed class Aethertide(BossModule module) : Components.SpreadFromCastTargets(module, (uint)AID.AethertideAOE, 8f)
+{
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        var spreads = ActiveSpreads;
+        if (spreads.Count == 0)
+            return;
+        var hazards = new List<Components.GenericAOEs.AOEInstance>();
+        foreach (var component in Module.Components.OfType<Components.GenericAOEs>())
+            foreach (ref readonly var aoe in component.ActiveAOEs(slot, actor))
+                if (aoe.Risky)
+                {
+                    hazards.Add(aoe);
+                    // Spread inside the available safe area from the start of the cast;
+                    // do not cross Crimson Blade's future danger zone to reach a wider gap.
+                    hints.AddForbiddenZone(aoe.ShapeDistance ?? aoe.Shape.Distance(aoe.Origin, aoe.Rotation));
+                }
+        if (IsSpreadTarget(actor))
+        {
+            var others = spreads.Where(s => s.Target != actor).Select(s => s.Target.Position).ToArray();
+            if (others.Length == 0)
+                return;
+            // Like CE201 Familiar Tactics, score only positions outside the other mechanics.
+            // Separation is a preference: the 180-degree Crimson Blade can leave too little
+            // room for three non-overlapping circles. Hard 17y exclusions erase that safe area.
+            var unsafeAOEs = hazards.ToArray();
+            var center = Arena.Center;
+            var separation = 2f * SpreadRadius + 1f;
+            hints.GoalZones.Add(position =>
+            {
+                if (!position.InCircle(center, CE42FromBeyondTheGrave.SafeRadius - 1f) || unsafeAOEs.Any(aoe => aoe.Check(position)))
+                    return 0f;
+                var clearance = separation;
+                foreach (var other in others)
+                    clearance = Math.Min(clearance, (position - other).Length());
+                return 20f + 10f * clearance / separation;
+            });
+            return;
+        }
+        for (var i = 0; i < spreads.Count; ++i)
+        {
+            var first = spreads[i];
+            for (var j = i + 1; j < spreads.Count; ++j)
+            {
+                var second = spreads[j];
+                // Unmarked players may take one circle, but never the intersection of two.
+                hints.AddForbiddenZone(new SDIntersection([new SDCircle(first.Target.Position, SpreadRadius),
+                    new SDCircle(second.Target.Position, SpreadRadius)]));
+            }
+        }
+    }
+
+    public override void AddHints(int slot, Actor actor, TextHints hints) { }
+}
 class MarchingBreath(BossModule module) : Components.CastInterruptHint(module, (uint)AID.MarchingBreath, showNameInHint: true); // heals all allies by 20% of max health (raidwide)
 class TacticalAero(BossModule module) : Components.SimpleAOEs(module, (uint)AID.TacticalAero, new AOEShapeRect(40f, 4f));
 class EntropicFlame(BossModule module) : Components.SimpleAOEs(module, (uint)AID.EntropicFlame, new AOEShapeRect(60f, 4f));
@@ -198,11 +373,24 @@ class SoulSacrifice(BossModule module) : Components.CastInterruptHint(module, (u
 
 class PurifyingLight : Components.SimpleAOEs
 {
-    public PurifyingLight(BossModule module) : base(module, (uint)AID.PurifyingLight, 12f)
+    public const float Radius = 12f;
+
+    public PurifyingLight(BossModule module) : base(module, (uint)AID.PurifyingLight, Radius)
     {
         Color = Colors.SafeFromAOE;
         Risky = false;
     }
+
+    // The helper hit is ~0.1s after cast finish; retain the safe circle through that gap.
+    public override void OnCastFinished(Actor caster, ActorCastInfo spell) { }
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell)
+    {
+        if (spell.Action.ID == (uint)AID.PurifyingLightAOE)
+            Casters.Clear();
+    }
+
+    public override void Update() => Casters.RemoveAll(c => c.Activation.AddSeconds(1d) < WorldState.CurrentTime);
 }
 
 class CE42FromBeyondTheGraveStates : StateMachineBuilder
@@ -210,7 +398,9 @@ class CE42FromBeyondTheGraveStates : StateMachineBuilder
     public CE42FromBeyondTheGraveStates(BossModule module) : base(module)
     {
         TrivialPhase()
-            .ActivateOnEnter<ArenaChange>()
+            .OnEnter(((CE42FromBeyondTheGrave)module).DisableAutomaticSprint)
+            .OnExit(((CE42FromBeyondTheGrave)module).RestoreSprint)
+            .ActivateOnEnter<ElectricFence>()
             .ActivateOnEnter<DevourSoul>()
             .ActivateOnEnter<Blight>()
             .ActivateOnEnter<PurifyingLight>()
@@ -229,9 +419,33 @@ class CE42FromBeyondTheGraveStates : StateMachineBuilder
 }
 
 [ModuleInfo(BossModuleInfo.Maturity.Verified, Contributors = "Malediktus", GroupType = BossModuleInfo.GroupType.CriticalEngagement, GroupID = 778, NameID = 20)] // bnpcname=9931
-public class CE42FromBeyondTheGrave(WorldState ws, Actor primary) : BossModule(ws, primary, startingArena.Center, startingArena)
+public class CE42FromBeyondTheGrave(WorldState ws, Actor primary) : BossModule(ws, primary, ArenaCenter, new ArenaBoundsCircle(ArenaRadius))
 {
-    private static readonly ArenaBoundsCustom startingArena = new([new Polygon(new(-60f, 800f), 29.5f, 32)]);
+    public static readonly WPos ArenaCenter = new(-60f, 800f);
+    public const float ArenaRadius = 30f;
+    public const float SafeRadius = 25f;
+    private ActionDefinition? _sprint;
+    private ActionDefinition.ConditionDelegate? _previousSprintCondition;
+    private ActionDefinition.ConditionDelegate? _sprintCondition;
+
+    // Reuse CE32's module-scoped sprint policy: automatic sprint would change march distance.
+    internal void DisableAutomaticSprint()
+    {
+        if (_sprint != null || ActionDefinitions.Instance[ActionDefinitions.IDSprint] is not { } sprint)
+            return;
+        _sprint = sprint;
+        var previous = _previousSprintCondition = sprint.AllowExecute;
+        sprint.AllowExecute = _sprintCondition = (ws, player, action, hints)
+            => (action.Manual || !ReferenceEquals(ws, WorldState) || StateMachine.ActivePhase == null)
+                && (previous?.Invoke(ws, player, action, hints) ?? true);
+    }
+
+    internal void RestoreSprint()
+    {
+        if (_sprint != null && _sprint.AllowExecute == _sprintCondition)
+            _sprint.AllowExecute = _previousSprintCondition;
+        _sprint = null;
+    }
 
     protected override void DrawEnemies(int pcSlot, Actor pc)
     {

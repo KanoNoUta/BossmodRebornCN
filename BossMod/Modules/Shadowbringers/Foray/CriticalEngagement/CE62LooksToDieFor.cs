@@ -5,6 +5,7 @@ public enum OID : uint
     Boss = 0x31C9, // R5.950, x1
     PurpleLevin = 0x31CA, // R1.000-2.000, spawn during fight
     BallOfFire = 0x31CB, // R1.000, spawn during fight
+    ElectricFence = 0x1EB180,
     Helper = 0x233C
 }
 
@@ -35,6 +36,18 @@ public enum AID : uint
     LevinboltAOE = 23984, // Helper->players, 5.0s cast, range 6 circle spread
     SerpentsEdge = 23985, // Boss->player, 5.0s cast, single-target, tankbuster
     Deathwall = 24711 // Helper->self, no cast, range 20-30 donut
+}
+
+sealed class ElectricFence(BossModule module) : Components.GenericAOEs(module)
+{
+    // b2258yuka4_d.avfx: the electric floor appears after the first Thundercall and lasts until the boss dies.
+    private static readonly AOEShapeDonut fence = new(CE62LooksToDieFor.SafeRadius, CE62LooksToDieFor.ArenaRadius);
+    private readonly List<Actor> _fences = module.Enemies((uint)OID.ElectricFence);
+    private readonly AOEInstance[] _aoe = [new(fence, module.Center)];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => _fences.Any(f => !f.IsDestroyed) ? _aoe : [];
+
+    public override void AddHints(int slot, Actor actor, TextHints hints) { }
 }
 
 sealed class Thundercall(BossModule module) : Components.RaidwideCast(module, (uint)AID.Thundercall, "Raidwide + summon lighting orbs");
@@ -184,6 +197,7 @@ sealed class CE62LooksToDieForStates : StateMachineBuilder
     public CE62LooksToDieForStates(BossModule module) : base(module)
     {
         TrivialPhase()
+            .ActivateOnEnter<ElectricFence>()
             .ActivateOnEnter<Thundercall>()
             .ActivateOnEnter<LightningBoltDistantClap>()
             .ActivateOnEnter<TwistingWinds>()
@@ -199,7 +213,10 @@ sealed class CE62LooksToDieForStates : StateMachineBuilder
 }
 
 [ModuleInfo(BossModuleInfo.Maturity.Verified, GroupType = BossModuleInfo.GroupType.CriticalEngagement, GroupID = 778, NameID = 30)] // bnpcname=9925
-public sealed class CE62LooksToDieFor(WorldState ws, Actor primary) : BossModule(ws, primary, new(-200f, -580f), new ArenaBoundsCircle(20f))
+public sealed class CE62LooksToDieFor(WorldState ws, Actor primary) : BossModule(ws, primary, new(-200f, -580f), new ArenaBoundsCircle(ArenaRadius))
 {
-    protected override bool CheckPull() => base.CheckPull() && Raid.Player()!.Position.InCircle(Arena.Center, 20f);
+    public const float ArenaRadius = 30f;
+    public const float SafeRadius = 20f;
+
+    protected override bool CheckPull() => base.CheckPull() && Raid.Player()!.Position.InCircle(Arena.Center, SafeRadius);
 }
