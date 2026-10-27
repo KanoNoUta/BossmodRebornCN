@@ -1,7 +1,6 @@
 ﻿namespace BossMod.Dawntrail.Foray.FATE.ScaleModel;
 
-public enum OID : uint
-{
+public enum OID : uint {
     DemiMedusa = 0x4C6A,
     Helper = 0x233C,
     DefectiveLamia = 0x4DD8, // R2.500, x0 (spawn during fight)
@@ -16,11 +15,9 @@ public enum OID : uint
     DefectiveLamia5 = 0x4D52, // R2.500, x0 (spawn during fight)
     DefectiveLamia6 = 0x4D53, // R2.500, x0 (spawn during fight)
     DefectiveLamia7 = 0x4D51, // R2.500, x0 (spawn during fight)
-    CrescentAdamantoise = 0x4E28, // R5.000, x?
 }
 
-public enum AID : uint
-{
+public enum AID : uint {
     AutoAttack = 50538, // DemiMedusa->player, no cast, single-target
     Summon = 48300, // DemiMedusa->self, 3.0s cast, single-target
     CursedSight = 48252, // DemiMedusa->self, 5.0s cast, range 60 60.000-degree cone
@@ -28,41 +25,37 @@ public enum AID : uint
     LamianLesion = 48254, // DemiMedusa->self, 5.0s cast, range 25 180.000-degree cone
     DarkCast = 48255, // DemiMedusa->self, 3.0s cast, single-target
     Dark = 48256, // 4C6C/4CAE/4EC1/4EC2->location, 3.0s cast, range 6 circle
-    TortoiseStomp = 50598, // 4E28->self, 3.0s cast, range 8 circle
 }
 
-sealed class CursedSight(BossModule module) : Components.SimpleAOEGroups(module, [(uint)AID.CursedSight, (uint)AID.CursedSight1], new AOEShapeCone(60f, 30f.Degrees()));
-sealed class LamianLesion(BossModule module) : Components.SimpleAOEs(module, (uint)AID.LamianLesion, new AOEShapeCone(25f, 90f.Degrees()));
+sealed class CursedSight(BossModule module) : Components.SimpleAOEGroups(module, [(uint)AID.CursedSight, (uint)AID.CursedSight1],
+    new AOEShapeCone(60.0f, 30.0f.Degrees()));
+sealed class LamianLesion(BossModule module) : Components.SimpleAOEs(module, (uint)AID.LamianLesion, new AOEShapeCone(25.0f, 90.0f.Degrees()));
 sealed class Dark(BossModule module) : Components.SimpleAOEs(module, (uint)AID.Dark, 6f);
-sealed class TortoiseStomp(BossModule module) : Components.SimpleAOEs(module, (uint)AID.TortoiseStomp, 8f);
 
-sealed class ScaleModelStates : StateMachineBuilder
-{
-    public ScaleModelStates(BossModule module) : base(module)
-    {
+sealed class ScaleModelStates : StateMachineBuilder {
+    public ScaleModelStates(BossModule module) : base(module) {
         TrivialPhase()
             .ActivateOnEnter<CursedSight>()
             .ActivateOnEnter<LamianLesion>()
-            .ActivateOnEnter<Dark>()
-            .ActivateOnEnter<TortoiseStomp>();
+            .ActivateOnEnter<Dark>();
     }
 }
 
-[ModuleInfo(BossModuleInfo.Maturity.Verified,
+[ModuleInfo(BossModuleInfo.Maturity.Contributed,
     StatesType = typeof(ScaleModelStates),
     ConfigType = null, // replace null with typeof(DemiMedusaConfig) if applicable
     ObjectIDType = typeof(OID),
-    ActionIDType = typeof(AID), // replace null with typeof(AID) if applicable
+    ActionIDType = typeof(AID),
     StatusIDType = null, // replace null with typeof(SID) if applicable
     TetherIDType = null, // replace null with typeof(TetherID) if applicable
     IconIDType = null, // replace null with typeof(IconID) if applicable
     PrimaryActorOID = (uint)OID.DemiMedusa,
-    Contributors = "Equilius",
+    Contributors = "KanoNoUta",
     Expansion = BossModuleInfo.Expansion.Dawntrail,
     Category = BossModuleInfo.Category.Foray,
     GroupType = BossModuleInfo.GroupType.ForayFATE,
     GroupID = 1093u,
     NameID = 2083u,
-    SortOrder = 12,
+    SortOrder = 1,
     PlanLevel = 0)]
 public sealed class DemiMedusa(WorldState ws, Actor primary) : OpenWorldFate(ws, primary);

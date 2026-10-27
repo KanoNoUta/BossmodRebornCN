@@ -1,7 +1,6 @@
 ﻿namespace BossMod.Dawntrail.Foray.FATE.Thunderregnum;
 
-public enum OID : uint
-{
+public enum OID : uint {
     Cresceregina = 0x4D63,
     Helper = 0x233C,
     Cresceregina1 = 0x4EC4, // R0.500, x0 (spawn during fight)
@@ -11,8 +10,7 @@ public enum OID : uint
     BallOfLevin = 0x4D64, // R2.000, x0 (spawn during fight)
 }
 
-public enum AID : uint
-{
+public enum AID : uint {
     AutoAttack = 50539, // Cresceregina->player, no cast, single-target
     HighCaterwaul = 49499, // Cresceregina->self, 3.0s cast, single-target
     RegalFulguration = 49494, // Cresceregina->self, 5.0s cast, range 40 180.000-degree cone
@@ -30,24 +28,77 @@ public enum AID : uint
     ThunderboltPuddle8 = 49926, // 4D65->location, 9.0s cast, range 10 circle
 }
 
-sealed class RegalFulguration(BossModule module) : Components.SimpleAOEGroups(module, [(uint)AID.RegalFulguration, (uint)AID.RegalFulguration1], new AOEShapeCone(40f, 90f.Degrees()));
+sealed class RegalFulguration(BossModule module) : Components.SimpleAOEGroups(module, [(uint)AID.RegalFulguration, (uint)AID.RegalFulguration1], new AOEShapeCone(40.0f, 90.0f.Degrees()));
 sealed class Thunderbolt(BossModule module) : Components.SimpleAOEs(module, (uint)AID.Thunderbolt, 10f);
-sealed class NobleBlaster(BossModule module) : Components.SimpleAOEs(module, (uint)AID.NobleBlaster, new AOEShapeRect(50f, 2.5f));
+sealed class NobleBlaster(BossModule module) : Components.SimpleAOEs(module, (uint)AID.NobleBlaster, new AOEShapeRect(50.0f, 2.5f));
 
-sealed class ThunderboltPuddle : Components.SimpleAOEGroups
-{
-    public ThunderboltPuddle(BossModule module) : base(module, [(uint)AID.ThunderboltPuddle, (uint)AID.ThunderboltPuddle1, (uint)AID.ThunderboltPuddle2,
-            (uint)AID.ThunderboltPuddle3, (uint)AID.ThunderboltPuddle4, (uint)AID.ThunderboltPuddle5, (uint)AID.ThunderboltPuddle6,
-            (uint)AID.ThunderboltPuddle7, (uint)AID.ThunderboltPuddle8], 10f, 8, 9, 5d)
-    {
-        MaxDangerColor = 5;
+sealed class ThunderboltPuddle(BossModule module) : Components.GenericAOEs(module) {
+    private static readonly AOEShapeCircle Shape = new(10f);
+    private readonly List<AOEInstance> _aoes = [];
+    private readonly List<AOEInstance> _displayed = [with(9)];
+    private readonly HashSet<uint> _seenGlobalSequences = [];
+
+    public override void OnCastStarted(Actor caster, ActorCastInfo spell) {
+        switch ((AID)spell.Action.ID) {
+            case AID.ThunderboltPuddle:
+            case AID.ThunderboltPuddle1:
+            case AID.ThunderboltPuddle2:
+            case AID.ThunderboltPuddle3:
+            case AID.ThunderboltPuddle4:
+            case AID.ThunderboltPuddle5:
+            case AID.ThunderboltPuddle6:
+            case AID.ThunderboltPuddle7:
+            case AID.ThunderboltPuddle8:
+                if (!_aoes.Any(aoe => aoe.ActorID == caster.InstanceID))
+                    // Start movement one second before the damage packet. The nine circles resolve
+                    // in 0.5s steps; waiting for the raw finish time makes autorotation trail the
+                    // visible sequence by roughly one circle.
+                    _aoes.Add(new(Shape, spell.LocXZ, activation: Module.CastFinishAt(spell, -1f), actorID: caster.InstanceID,
+                        shapeDistance: Shape.Distance(spell.LocXZ, default)));
+                break;
+        }
+    }
+
+    public override void OnEventCast(Actor caster, ActorCastEvent spell) {
+        switch ((AID)spell.Action.ID) {
+            case AID.ThunderboltPuddle:
+            case AID.ThunderboltPuddle1:
+            case AID.ThunderboltPuddle2:
+            case AID.ThunderboltPuddle3:
+            case AID.ThunderboltPuddle4:
+            case AID.ThunderboltPuddle5:
+            case AID.ThunderboltPuddle6:
+            case AID.ThunderboltPuddle7:
+            case AID.ThunderboltPuddle8:
+                if (spell.GlobalSequence != 0 && !_seenGlobalSequences.Add(spell.GlobalSequence))
+                    break;
+                ++NumCasts;
+                _aoes.RemoveAll(aoe => aoe.ActorID == caster.InstanceID);
+                break;
+        }
+    }
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) {
+        _displayed.Clear();
+        _aoes.Sort((a, b) => a.Activation.CompareTo(b.Activation));
+        if (_aoes.Count == 0)
+            return CollectionsMarshal.AsSpan(_displayed);
+
+        var riskyDeadline = _aoes[0].Activation.AddSeconds(0.2d);
+        // All nine casts start together, so show the complete route immediately. Only the next
+        // circle is risky; later circles are planning markers and must not constrain pathfinding.
+        for (var i = 0; i < _aoes.Count; ++i) {
+            var aoe = _aoes[i];
+            aoe.Risky = aoe.Activation <= riskyDeadline;
+            aoe.Color = aoe.Risky ? Colors.Danger : Colors.AOE;
+            _displayed.Add(aoe);
+        }
+        return CollectionsMarshal.AsSpan(_displayed);
     }
 }
 
-sealed class ThunderregnumStates : StateMachineBuilder
-{
-    public ThunderregnumStates(BossModule module) : base(module)
-    {
+sealed class ThunderregnumStates : StateMachineBuilder {
+    public ThunderregnumStates(BossModule module) : base(module) {
         TrivialPhase()
             .ActivateOnEnter<RegalFulguration>()
             .ActivateOnEnter<Thunderbolt>()
@@ -56,6 +107,21 @@ sealed class ThunderregnumStates : StateMachineBuilder
     }
 }
 
-[ModuleInfo(BossModuleInfo.Maturity.Contributed, PrimaryActorOID = (uint)OID.Cresceregina, Contributors = "Equilius", GroupType = BossModuleInfo.GroupType.ForayFATE,
-    GroupID = 1093u, NameID = 2084u, SortOrder = 13)]
+[ModuleInfo(BossModuleInfo.Maturity.Contributed,
+    StatesType = typeof(ThunderregnumStates),
+    ConfigType = null, // replace null with typeof(CrescereginaConfig) if applicable
+    ObjectIDType = typeof(OID),
+    ActionIDType = typeof(AID),
+    StatusIDType = null, // replace null with typeof(SID) if applicable
+    TetherIDType = null, // replace null with typeof(TetherID) if applicable
+    IconIDType = null, // replace null with typeof(IconID) if applicable
+    PrimaryActorOID = (uint)OID.Cresceregina,
+    Contributors = "KanoNoUta",
+    Expansion = BossModuleInfo.Expansion.Dawntrail,
+    Category = BossModuleInfo.Category.Foray,
+    GroupType = BossModuleInfo.GroupType.ForayFATE,
+    GroupID = 1093u,
+    NameID = 2084u,
+    SortOrder = 1,
+    PlanLevel = 0)]
 public sealed class Thunderregnum(WorldState ws, Actor primary) : OpenWorldFate(ws, primary);
