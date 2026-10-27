@@ -1,51 +1,69 @@
-﻿namespace BossMod.Dawntrail.Foray.ForkedTowerMagic.Extreme.FTME2SwordDancer;
+using BossMod.Dawntrail.Foray.CriticalEngagement;
 
-sealed class SwordStorm(BossModule module) : Components.RaidwideCast(module, (uint)AID.SwordStorm);
-sealed class Rush(BossModule module) : Components.SimpleChargeAOEGroups(module, [(uint)AID.Rush1, (uint)AID.Rush2, (uint)AID.Rush3, (uint)AID.Rush4], 3.5f, 2, 2);
-sealed class RushLong(BossModule module) : Components.SimpleAOEs(module, (uint)AID.RushLong, new AOEShapeRect(30f, 3f), 8);
-sealed class TurnInner(BossModule module) : Components.SimpleAOEGroups(module, [(uint)AID.Turn1], new AOEShapeDonutSector(9f, 14f, 45f.Degrees()));
-sealed class TurnOuter(BossModule module) : Components.SimpleAOEGroups(module, [(uint)AID.Turn2, (uint)AID.Turnabout2], new AOEShapeDonutSector(19f, 24f, 45f.Degrees()));
-sealed class TurnMiddle(BossModule module) : Components.SimpleAOEGroups(module, [(uint)AID.Turn3, (uint)AID.Turn4, (uint)AID.Turnabout1], new AOEShapeDonutSector(14f, 19f, 45f.Degrees()));
-sealed class MartialMystique(BossModule module) : Components.SimpleAOEs(module, (uint)AID.MartialMystique, new AOEShapeRect(48f, 48f));
-sealed class Pierce(BossModule module) : Components.SimpleAOEs(module, (uint)AID.Pierce, 5f);
-sealed class SwordDance(BossModule module) : Components.GenericAOEs(module)
+namespace BossMod.Dawntrail.Foray.ForkedTowerMagic.Extreme.FTME2SwordDancer;
+
+// Extreme 超魔之塔 Boss2: Sword Dancer. 秘法剑 96y 半圆、长短突进、不可见钢铁 20m。
+// 舞动之剑（ModelState 预判月环/钢铁）与剑技爆发指路为进阶绘制。
+sealed class SwordDancerAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 {
-    // do sword markers rotate like in normal mode or can it be different?
-    private readonly List<AOEInstance> _aoes = [];
-    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
+    // 解包 49585: CastType=12, EffectRange=48, 宽 96 -> 48x96 中心对称矩形
+    private static readonly AOEShapeRect MartialMystique = new(24f, 48f, 24f);
+    private static readonly AOEShapeRect Rush = new(15f, 3f, 15f);
+    private static readonly AOEShapeRect RushLong = new(24f, 3.5f, 24f);
+    private static readonly AOEShapeCircle InvisibleSteel = new(20f);
+
+    protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
-        var count = _aoes.Count;
-        if (count == 0)
-            return [];
+        (uint)AID.MartialMystique => new(MartialMystique),
+        (uint)AID.Rush => new(Rush),
+        (uint)AID.RushLong => new(RushLong),
+        (uint)AID.InvisibleSteel => new(InvisibleSteel),
+        _ => null
+    };
+}
 
-        var max = count > 2 ? 2 : count;
-        var aoes = CollectionsMarshal.AsSpan(_aoes);
+// 超魔舞动之剑: 剑实体放 9710 动画时按当前 ModelState 预判伤害。
+// pose 0=小月环(10-40)、4=月环(15-40)、5=大月环(20-40)、6=小钢铁(10)、7=钢铁(15)、31=大钢铁(20)。
+sealed class DancingSwordTelegraph(BossModule module) : Components.GenericAOEs(module)
+{
+    private readonly List<AOEInstance> _displayed = [with(12)];
 
-        ref var aoe = ref aoes[0];
-        aoe.Color = Colors.Danger;
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => CollectionsMarshal.AsSpan(_displayed);
 
-        return aoes[..max];
-    }
-    public override void OnActorEAnim(Actor actor, uint state)
+    public override void OnActorPlayActionTimelineEvent(Actor actor, ushort id)
     {
-        if (actor.OID == (uint)OID.SwordDanceMarker && state == 0x00010002)
+        if (id != 9710 || actor.OID is not ((uint)OID.DancingSword or (uint)OID.DancingSword1 or (uint)OID.DancingSword2 or (uint)OID.DancingSword3 or (uint)OID.DancingSword4))
+            return;
+
+        AOEShape? shape = actor.ModelState.ModelState switch
         {
-            // 8.8s between 1st mark and 1st cast
-            // 1s between eanims, 2.4s-ish between actual cast
-            var count = _aoes.Count;
-            var act = WorldState.FutureTime(8.8d + 2.4d * count);
-            _aoes.Add(new(new AOEShapeRect(30f, 10f, 30f), actor.Position, actor.Rotation, act));
-        }
+            0 => new AOEShapeDonut(10f, 40f),
+            4 => new AOEShapeDonut(15f, 40f),
+            5 => new AOEShapeDonut(20f, 40f),
+            6 => new AOEShapeCircle(10f),
+            7 => new AOEShapeCircle(15f),
+            31 => new AOEShapeCircle(20f),
+            _ => null
+        };
+        if (shape == null)
+            return;
+
+        _displayed.RemoveAll(aoe => aoe.ActorID == actor.InstanceID);
+        _displayed.Add(new(shape, actor.Position, activation: WorldState.FutureTime(9d), actorID: actor.InstanceID));
     }
-    public override void OnCastFinished(Actor caster, ActorCastInfo spell)
+
+    public override void Update()
     {
-        if (_aoes.Count != 0 && spell.Action.ID == (uint)AID.SwordDance)
-        {
-            ++NumCasts;
-            _aoes.RemoveAt(0);
-        }
+        var now = WorldState.CurrentTime;
+        _displayed.RemoveAll(aoe => now > aoe.Activation.AddSeconds(1d));
     }
 }
 
-[ModuleInfo(BossModuleInfo.Maturity.Contributed, PrimaryActorOID = (uint)OID.SwordDancer, Contributors = "gynorhino", GroupType = BossModuleInfo.GroupType.TheForkedTowerMagicExtreme, GroupID = 1114u, NameID = 14820u, SortOrder = 2, PlanLevel = 100)]
-public sealed class FTME2SwordDancer(WorldState ws, Actor primary) : BossModule(ws, primary, new(600f, 704f), new ArenaBoundsCircle(24f));
+// Extreme Forked Tower support is intentionally not registered for CN release builds.
+public sealed class SwordDancer : BossModule
+{
+    public SwordDancer(WorldState ws, Actor primary) : base(ws, primary, new(600f, 704f), new ArenaBoundsSquare(25f))
+        => Service.Logger.Information($"[FT] {GetType().Name} created (oid={primary.OID:X})");
+
+    protected override void DrawEnemies(int pcSlot, Actor pc) => Arena.Actor(PrimaryActor, allowDeadAndUntargetable: true);
+}

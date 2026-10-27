@@ -1,159 +1,71 @@
-﻿namespace BossMod.Dawntrail.Foray.ForkedTowerMagic.Extreme.FTME3Necrophobia;
+using BossMod.Dawntrail.Foray.CriticalEngagement;
 
-// does it always have 2 instances of each damage eventcast? or is it only when there are 24+ players in tower?
-sealed class HailOfHellflares(BossModule module) : Components.RaidwideCast(module, (uint)AID.HailOfHellflares, "Raidwide x5");
-sealed class FireIII(BossModule module) : Components.SimpleAOEGroups(module, [(uint)AID.AncientFire1, (uint)AID.AncientFire2, (uint)AID.SeveredFire], 18f);
-sealed class BlizzardIII(BossModule module) : Components.SimpleAOEGroups(module, [(uint)AID.AncientBlizzard1, (uint)AID.AncientBlizzard2, (uint)AID.SeveredBlizzard], new AOEShapeCross(45f, 7.5f));
-sealed class ThunderIII(BossModule module) : Components.SimpleAOEGroups(module, [(uint)AID.AncientThunder1, (uint)AID.AncientThunder2, (uint)AID.SeveredThunder], new AOEShapeCone(60f, 22.5f.Degrees()));
-sealed class DeathlyRay(BossModule module) : Components.SimpleAOEs(module, (uint)AID.DeathlyRay, new AOEShapeRect(30f, 3f));
-sealed class VacuumWave(BossModule module) : Components.SimpleAOEs(module, (uint)AID.VacuumWave, new AOEShapeCone(30f, 90f.Degrees()));
-sealed class CorpseMangler(BossModule module) : Components.SingleTargetCast(module, (uint)AID.CorpseMangler);
-sealed class FertileGroundRaidwide(BossModule module) : Components.CastCounter(module, (uint)AID.FertileGround);
-sealed class SpellProcession(BossModule module) : BossComponent(module)
+namespace BossMod.Dawntrail.Foray.ForkedTowerMagic.Extreme.FTME3Necrophobia;
+
+// Extreme 超魔之塔 Boss3: Necrophobia. 黑暗奔涌 60x10 + 步进地火、真空波 180 度、
+// 联动爆炎/冰封/暴雷、古代爆炎 18m、古代冰封十字、分身古代暴雷。
+sealed class NecrophobiaAOEs(BossModule module) : ReplayValidatedCastAOEs(module)
 {
-    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    private static readonly AOEShapeRect DarkSurge = new(30f, 5f, 30f);
+    private static readonly AOEShapeCone Vacuum = new(30f, 90f.Degrees());
+    private static readonly AOEShapeCircle LinkageFire = new(13f);
+    private static readonly AOEShapeCross LinkageIce = new(45f, 7.5f);
+    private static readonly AOEShapeCone LinkageThunder = new(60f, 22.5f.Degrees());
+    private static readonly AOEShapeCircle AncientFire = new(18f);
+    private static readonly AOEShapeCross AncientBlizzard = new(45f, 7.5f);
+    private static readonly AOEShapeCone CloneThunder = new(60f, 22.5f.Degrees());
+
+    protected override AOEConfig? ConfigFor(uint actionID) => actionID switch
     {
-        // preposition towards middle
-        hints.GoalZones.Add(AIHints.GoalSingleTarget(Arena.Center, 5f));
-    }
+        (uint)AID.DarkSurge => new(DarkSurge),
+        (uint)AID.VacuumWave => new(Vacuum),
+        (uint)AID.LinkageFire => new(LinkageFire),
+        (uint)AID.LinkageIce => new(LinkageIce),
+        (uint)AID.LinkageThunder => new(LinkageThunder),
+        (uint)AID.AncientFire => new(AncientFire),
+        (uint)AID.AncientBlizzard => new(AncientBlizzard),
+        (uint)AID.CloneAncientThunder => new(CloneThunder),
+        _ => null
+    };
 }
-sealed class DeathShroud(BossModule module) : Components.GenericAOEs(module)
-{
-    private readonly List<AOEInstance> _aoes = [];
-    private readonly AOEShapeCircle _circle = new(18f);
-    private readonly AOEShapeCross _cross = new(45f, 7.5f);
-    private readonly AOEShapeCone _cone = new(60f, 22.5f.Degrees());
-    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
-    {
-        var count = _aoes.Count;
-        if (count == 0)
-        {
-            return [];
-        }
 
-        return CollectionsMarshal.AsSpan(_aoes);
-    }
+// 黑暗奔涌的左右步进地火（同普通版）：读条后 4s 起，左右各两轮 60x10，每轮外移 10y。
+sealed class DarkSurgeTreads(BossModule module) : Components.GenericAOEs(module)
+{
+    private static readonly AOEShapeRect Shape = new(30f, 5f, 30f);
+    private readonly List<AOEInstance> _displayed = [with(8)];
+
+    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor) => CollectionsMarshal.AsSpan(_displayed);
 
     public override void OnCastStarted(Actor caster, ActorCastInfo spell)
     {
-        switch (spell.Action.ID)
+        if (spell.Action.ID != (uint)AID.DarkSurge || spell.EventHappened)
+            return;
+        _displayed.Clear();
+        var origin = spell.LocXZ;
+        var side = (spell.Rotation + 90f.Degrees()).ToDirection();
+        for (var i = 0; i < 2; ++i)
         {
-            case (uint)AID.AncientFire1:
-            case (uint)AID.AncientFire2:
-            case (uint)AID.SeveredFire:
-                _aoes.Add(new(_circle, spell.LocXZ, spell.Rotation, Module.CastFinishAt(spell), default, true, caster.InstanceID, _circle.Distance(spell.LocXZ, spell.Rotation)));
-                break;
-            case (uint)AID.AncientBlizzard1:
-            case (uint)AID.AncientBlizzard2:
-            case (uint)AID.SeveredBlizzard:
-                _aoes.Add(new(_cross, spell.LocXZ, spell.Rotation, Module.CastFinishAt(spell), default, true, caster.InstanceID, _cross.Distance(spell.LocXZ, spell.Rotation)));
-                break;
-            case (uint)AID.AncientThunder1:
-            case (uint)AID.AncientThunder2:
-            case (uint)AID.SeveredThunder:
-                _aoes.Add(new(_cone, spell.LocXZ, spell.Rotation, Module.CastFinishAt(spell), default, true, caster.InstanceID, _cone.Distance(spell.LocXZ, spell.Rotation)));
-                break;
-        }
-    }
-
-    public override void OnCastFinished(Actor caster, ActorCastInfo spell)
-    {
-        if (_aoes.Count != 0)
-        {
-            switch (spell.Action.ID)
+            foreach (var sign in new[] { 1f, -1f })
             {
-                case (uint)AID.AncientFire1:
-                case (uint)AID.AncientFire2:
-                case (uint)AID.SeveredFire:
-                case (uint)AID.AncientBlizzard1:
-                case (uint)AID.AncientBlizzard2:
-                case (uint)AID.SeveredBlizzard:
-                case (uint)AID.AncientThunder1:
-                case (uint)AID.AncientThunder2:
-                case (uint)AID.SeveredThunder:
-                    ++NumCasts;
-                    _aoes.RemoveAt(0);
-                    break;
-            }
-        }
-    }
-}
-sealed class DarkCurrent(BossModule module) : Components.GenericAOEs(module)
-{
-    private readonly List<AOEInstance> _aoes = [];
-    private readonly AOEShapeRect _rect = new(60f, 5f);
-
-    public override ReadOnlySpan<AOEInstance> ActiveAOEs(int slot, Actor actor)
-    {
-        var count = _aoes.Count;
-        if (count == 0)
-            return [];
-        var max = count == 5 ? 3 : count > 3 ? 4 : count;
-        var aoes = CollectionsMarshal.AsSpan(_aoes)[..max];
-        var isFourAOEs = max == 4;
-        var isThreeAOEs = max == 3;
-
-        for (var i = 0; i < max; ++i)
-        {
-            ref var aoe = ref aoes[i];
-
-            var shouldBeDanger = isFourAOEs && i < 2 || isThreeAOEs && i == 0;
-            var shouldBeRisky = shouldBeDanger || max == 2 && i < 2;
-
-            if (shouldBeDanger)
-                aoe.Color = Colors.Danger;
-
-            if (shouldBeRisky)
-                aoe.Risky = true;
-        }
-
-        return aoes;
-    }
-    public override void OnCastStarted(Actor caster, ActorCastInfo spell)
-    {
-        if (spell.Action.ID == (uint)AID.DarkCurrent1)
-        {
-            //2.1s between casts
-            var act = Module.CastFinishAt(spell);
-            var position = spell.LocXZ;
-            var rotation = spell.Rotation;
-            var dir = rotation.ToDirection().OrthoL().Normalized();
-            var distance = 10f;
-            _aoes.Add(new(_rect, position, rotation, act, risky: true));
-
-            for (var i = 1; i <= 2; ++i)
-            {
-                _aoes.Add(new(_rect, position + i * distance * dir, rotation, act.AddSeconds(2.1d * i), risky: false));
-                _aoes.Add(new(_rect, position + i * distance * dir * -1f, rotation, act.AddSeconds(2.1d * i), risky: false));
+                var center = origin + side * (10f * (i + 1) * sign);
+                _displayed.Add(new(Shape, center, spell.Rotation, activation: WorldState.FutureTime(4d + i * 2d), risky: i == 0));
             }
         }
     }
 
     public override void OnCastFinished(Actor caster, ActorCastInfo spell)
     {
-        if (_aoes.Count != 0)
-        {
-            switch (spell.Action.ID)
-            {
-                case (uint)AID.DarkCurrent1:
-                case (uint)AID.DarkCurrent2:
-                    _aoes.RemoveAt(0);
-                    break;
-            }
-        }
-    }
-
-    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
-    {
-        // stay near initial cast to move in after
-        if (_aoes.Count == 5)
-        {
-            ref var aoe = ref _aoes.Ref(0);
-            hints.GoalZones.Add(AIHints.GoalRectangle(aoe.Origin, aoe.Rotation.ToDirection(), 7f, 60f, 100f));
-        }
-        base.AddAIHints(slot, actor, assignment, hints);
+        if (spell.Action.ID == (uint)AID.DarkSurge)
+            _displayed.Clear();
     }
 }
 
-[ModuleInfo(BossModuleInfo.Maturity.Contributed, PrimaryActorOID = (uint)OID.Necrophobia, Contributors = "gynorhino", GroupType = BossModuleInfo.GroupType.TheForkedTowerMagicExtreme, GroupID = 1114u, NameID = 14503u, SortOrder = 3, PlanLevel = 100)]
-public sealed class FTME3Necrophobia(WorldState ws, Actor primary) : BossModule(ws, primary, new(100f, 800f), new ArenaBoundsCircle(24f));
+// Extreme Forked Tower support is intentionally not registered for CN release builds.
+public sealed class Necrophobia : BossModule
+{
+    public Necrophobia(WorldState ws, Actor primary) : base(ws, primary, new(100f, 789f), new ArenaBoundsSquare(25f))
+        => Service.Logger.Information($"[FT] {GetType().Name} created (oid={primary.OID:X})");
+
+    protected override void DrawEnemies(int pcSlot, Actor pc) => Arena.Actor(PrimaryActor, allowDeadAndUntargetable: true);
+}
