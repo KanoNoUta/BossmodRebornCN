@@ -27,7 +27,6 @@ sealed class AIManager : IDisposable
         _wndAI = new AIManagementWindow(this);
         Autorot = autorot;
         Controller = new(autorot.WorldState, amex, movement);
-        Service.CommandManager.AddHandler("/bmrai", new Dalamud.Game.Command.CommandInfo(OnCommand) { HelpMessage = "Toggle AI mode" });
     }
 
     public void SetAIPreset(Preset? p)
@@ -41,7 +40,6 @@ sealed class AIManager : IDisposable
     {
         SwitchToIdle();
         _wndAI.Dispose();
-        Service.CommandManager.RemoveHandler("/bmrai");
         Instance = null;
     }
 
@@ -136,7 +134,8 @@ sealed class AIManager : IDisposable
         return slot >= 0 ? Array.FindIndex(WorldState.Party.Members, m => m.ContentId == group->PartyMembers[slot].ContentId) : -1;
     }
 
-    private void OnCommand(string cmd, string message)
+    // /bmrai is registered by Plugin at load time and forwarded here.
+    internal void OnCommand(string cmd, string message)
     {
         var messageData = message.Split(' ');
         if (messageData.Length == 0)

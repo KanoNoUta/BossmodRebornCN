@@ -30,6 +30,8 @@ public sealed class Plugin : IAsyncDalamudPlugin
     private bool _runtimeDisposed;
     private bool _gameplayEnabled;
     private bool _commandRegistered;
+    private bool _aiCommandRegistered;
+    private Exception? _initializationError;
 
     private RotationDatabase _rotationDB = null!;
     private WorldState _ws = null!;
@@ -116,11 +118,17 @@ public sealed class Plugin : IAsyncDalamudPlugin
         {
             _commandRegistered = CommandManager.AddHandler("/bmr", new CommandInfo((cmd, args) =>
             {
-                if (!_initialized || _runtimeDisposed) return;
-                OnCommand(cmd, args);
+                if (RuntimeReady())
+                    OnCommand(cmd, args);
             }) { HelpMessage = "Show BossMod settings" });
             if (!_commandRegistered)
                 throw new InvalidOperationException("/bmr 已被其他插件使用，请禁用另一版本的 BossMod 后重试。");
+            // Registered with /bmr so the command exists even if runtime initialization fails or has not run yet.
+            _aiCommandRegistered = CommandManager.AddHandler("/bmrai", new CommandInfo((cmd, args) =>
+            {
+                if (RuntimeReady())
+                    AI.AIManager.Instance?.OnCommand(cmd, args);
+            }) { HelpMessage = "Toggle AI mode" });
             _dalamud.UiBuilder.DisableAutomaticUiHide = true;
             _dalamud.UiBuilder.Draw += DrawUI;
             _dalamud.UiBuilder.OpenMainUi += OpenMainUI;
@@ -135,8 +143,17 @@ public sealed class Plugin : IAsyncDalamudPlugin
         Service.Condition.ConditionChange += OnConditionChanged;
         MultiboxUnlock.Exec();
         Camera.Instance = new();
-        _worldOverlayNode = new();
-        Dx11ArenaRenderer.SetWorldOverlayNode(_worldOverlayNode);
+        // The native overlay only backs 3D projection; if it cannot be created on this client, keep the rest of the plugin running.
+        try
+        {
+            _worldOverlayNode = new();
+            Dx11ArenaRenderer.SetWorldOverlayNode(_worldOverlayNode);
+        }
+        catch (Exception ex)
+        {
+            Service.Logger.Error(ex, "Failed to create world overlay node; 3D projection will fall back to ImGui");
+            _worldOverlayNode = null;
+        }
 
         Service.Config.Modified.Subscribe(() => Task.Run(() => Service.Config.SaveToFile(_dalamud.ConfigFile)));
 
@@ -196,6 +213,11 @@ public sealed class Plugin : IAsyncDalamudPlugin
             CommandManager.RemoveHandler("/bmr");
             _commandRegistered = false;
         }
+        if (_aiCommandRegistered)
+        {
+            CommandManager.RemoveHandler("/bmrai");
+            _aiCommandRegistered = false;
+        }
         DisposeRuntime();
     }
 
@@ -215,6 +237,16 @@ public sealed class Plugin : IAsyncDalamudPlugin
             catch (Exception ex) { Service.Logger.Error(ex, "Failed to dispose BossMod runtime resource"); }
         }
         GarbageCollection();
+    }
+
+    private bool RuntimeReady()
+    {
+        if (_initialized && !_runtimeDisposed)
+            return true;
+        Service.ChatGui.PrintError(_initializationError != null
+            ? $"[BMR] 初始化失败，命令不可用：{_initializationError.GetType().Name}: {_initializationError.Message}（详见 dalamud.log）"
+            : "[BMR] 插件尚未初始化完成，请稍后再试。");
+        return false;
     }
 
     private void OnCommand(string cmd, string args)
@@ -399,6 +431,8 @@ public sealed class Plugin : IAsyncDalamudPlugin
                 catch (Exception ex)
                 {
                     Service.Logger.Error(ex, "BossMod initialization failed");
+                    _initializationError = ex;
+                    Service.ChatGui.PrintError($"[BMR] 初始化失败，插件未启用：{ex.GetType().Name}: {ex.Message}");
                     DisposeRuntime();
                 }
             }
