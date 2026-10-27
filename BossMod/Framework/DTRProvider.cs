@@ -23,7 +23,7 @@ internal sealed class DTRProvider : IDisposable
         _ai = ai;
 
         _autorotationEntry.OnClick = _ => _wantOpenPopup = true;
-        _aiEntry.Tooltip = "Left Click => Toggle Enabled";
+        _aiEntry.Tooltip = "左键 => 切换启用";
 
         _aiEntry.OnClick = _ =>
         {
@@ -50,7 +50,7 @@ internal sealed class DTRProvider : IDisposable
         _autorotationEntry.Shown = show;
         if (show)
         {
-            var (icon, name) = _mgr.Preset == null ? (BitmapFontIcon.SwordSheathed, "Idle") : _mgr.Preset == RotationModuleManager.ForceDisable ? (BitmapFontIcon.SwordSheathed, "Disabled") : (BitmapFontIcon.SwordUnsheathed, _mgr.Preset.Name);
+            var (icon, name) = _mgr.Preset == null ? (BitmapFontIcon.SwordSheathed, "空闲") : _mgr.Preset == RotationModuleManager.ForceDisable ? (BitmapFontIcon.SwordSheathed, "已禁用") : (BitmapFontIcon.SwordUnsheathed, _mgr.Preset.Name);
             Payload prefix = RotationModuleManager.Config.ShowDTR == AutorotationConfig.DtrStatus.TextOnly ? new TextPayload("bmr: ") : new IconPayload(icon);
             _autorotationEntry.Text = new SeString(prefix, new TextPayload(name));
         }
@@ -60,7 +60,7 @@ internal sealed class DTRProvider : IDisposable
         var beh = _ai.Beh;
         if (show2)
         {
-            _aiEntry.Text = "AI: " + (beh == null ? "Off" : "On");
+            _aiEntry.Text = "AI: " + (beh == null ? "关" : "开");
         }
 
         if (_wantOpenPopup && _mgr.Player != null)

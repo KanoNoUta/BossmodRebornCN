@@ -1,9 +1,10 @@
 {
-  "Author": "The Combat Reborn Team",
-  "Name": "BossMod Reborn",
+  "Author": "KanoNoUta",
+  "Name": "BossModReborn 斗兽版本",
   "InternalName": "BossModReborn",
-  "RepoUrl": "https://github.com/FFXIV-CombatReborn/BossmodReborn",
-  "Description": "A bunch of utilities to simplify boss mechanics",
+  "RepoUrl": "https://github.com/KanoNoUta/BossmodRebornCN",
+  "Description": "支持斗兽自走棋部分线路",
+  "Changelog": "7.5.6.14：树精阶段取消小怪自动转火和优先击杀提示，保留手动选择及清空目标；继续保留树精脚下禁区、范围预警和避让。",
   "ApplicableVersion": "any",
   "Tags": [
     "combat",
@@ -21,11 +22,12 @@
   "LoadPriority": 0,
   "IsTestingExclusive": false,
   "IconUrl": "https://raw.githubusercontent.com/FFXIV-CombatReborn/RebornAssets/main/IconAssets/BMR_Icon.png",
-  "Punchline": "Don't fail at raid mechanics anymore",
+  "Punchline": "斗兽奇弈机制提示与自动避让",
   "AcceptsFeedback": true,
   "ImageUrls": [
     "https://raw.githubusercontent.com/FFXIV-CombatReborn/BossmodReborn/master/Data/image1.png",
     "https://raw.githubusercontent.com/FFXIV-CombatReborn/BossmodReborn/master/Data/image2.png",
     "https://raw.githubusercontent.com/FFXIV-CombatReborn/BossmodReborn/master/Data/image3.png"
-  ]
+  ],
+  "AssemblyVersion": "7.5.6.14"
 }

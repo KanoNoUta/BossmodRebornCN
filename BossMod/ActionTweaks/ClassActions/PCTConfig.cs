@@ -3,6 +3,6 @@
 [ConfigDisplay(Parent = typeof(ActionTweaksConfig))]
 class PCTConfig : ConfigNode
 {
-    [PropertyDisplay("Align Smudge with camera direction")]
+    [PropertyDisplay("重影步与镜头方向对齐")]
     public bool AlignDashToCamera = false;
 }

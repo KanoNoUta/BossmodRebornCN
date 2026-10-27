@@ -1,4 +1,4 @@
-﻿namespace BossMod;
+namespace BossMod;
 
 public enum Class : byte
 {
@@ -45,7 +45,7 @@ public enum Class : byte
     SGE = 40,
     VPR = 41,
     PCT = 42,
-    BST = 43,
+    BST = 43, // 驯兽师（受限职业；ClassJob.Role=2 → 近战 DPS）
 }
 
 public enum ClassCategory

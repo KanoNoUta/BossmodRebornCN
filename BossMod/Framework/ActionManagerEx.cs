@@ -48,6 +48,7 @@ public sealed unsafe class ActionManagerEx : IDisposable
     public static readonly ActionTweaksConfig Config = Service.Config.Get<ActionTweaksConfig>();
     public static ActionManagerEx? Instance;
     public ActionQueue.Entry AutoQueue;
+    private bool _gameplayEnabled = true;
     public bool MoveMightInterruptCast; // if true, moving now might cause cast interruption (for current or queued cast)
     public readonly CastTracker CastTracker = new();
     private readonly ActionManager* _inst = ActionManager.Instance();
@@ -129,6 +130,21 @@ public sealed unsafe class ActionManagerEx : IDisposable
         _useActionHook.Dispose();
         _updateHook.Dispose();
         _oocActionsTweak.Dispose();
+    }
+
+    // Suspend input hooks during logout and temporary player/territory loading.
+    public void SetGameplayEnabled(bool enabled)
+    {
+        _gameplayEnabled = enabled;
+        if (!enabled)
+        {
+            AutoQueue = default;
+            _manualQueue.Clear();
+            _movement.MovementBlocked = false;
+        }
+        _updateHook.Enabled = _useActionHook.Enabled = _useActionLocationHook.Enabled = enabled;
+        _useBozjaFromHolsterDirectorHook.Enabled = _usePomanderHook.Enabled = _useStoneHook.Enabled = enabled;
+        _setAutoAttackStateHook.Enabled = enabled;
     }
 
     public void QueueManualActions()
@@ -419,6 +435,9 @@ public sealed unsafe class ActionManagerEx : IDisposable
 
     private Angle? CalculateDesiredOrientation(bool actionImminent)
     {
+        if (_hints.LockedFacing(_ws.CurrentTime) is { } locked)
+            return _smartRotationTweak.GetSafeRotation(locked, null, default) ?? locked;
+
         if (actionImminent && AutoQueue.FacingAngle != null)
         {
             return AutoQueue.FacingAngle; // explicit angle overrides all other concerns
@@ -455,8 +474,20 @@ public sealed unsafe class ActionManagerEx : IDisposable
         var idealOrientation = currentAction ? _smartRotationTweak.GetSpellOrientation(GetSpellIdForAction(currentAction), new(player->Position.X, player->Position.Z), currentTargetSelf, currentTargetPos, currentTargetLoc) : null;
         var avoidGaze = _smartRotationTweak.GetSafeRotation(current, idealOrientation, isCasting ? 75.Degrees() : 45.Degrees());
 
+        // 组件期望朝向（DesiredFacing，2026-08-16 方案 A）：驱动原地转向（如强制移动预瞄），
+        // gaze 规避（avoidGaze）优先保命，其次 DesiredFacing，最后 restore。
+        // idealOrientation 为 null（预瞄期 AI 未施法）时走本通道；DesiredFacingExpire 过期后自动失效。
+        if (avoidGaze != null)
+        {
+            return avoidGaze;
+        }
+        if (_hints.DesiredFacing is { } desired && _hints.DesiredFacingExpire > _ws.CurrentTime)
+        {
+            return desired;
+        }
+
         // avoiding a gaze has a priority over restore
-        return avoidGaze ?? restored;
+        return restored;
     }
 
     private void UpdateDetour(ActionManager* self)
@@ -487,7 +518,7 @@ public sealed unsafe class ActionManagerEx : IDisposable
         blockMovement |= Config.PyreticThreshold > 0 && _hints.ImminentSpecialMode.mode is AIHints.SpecialMode.Pyretic or AIHints.SpecialMode.NoMovement && _hints.ImminentSpecialMode.activation < _ws.FutureTime(Config.PyreticThreshold);
 
         // note: if we cancel movement and start casting immediately, it will be canceled some time later - instead prefer to delay for one frame
-        var actionImminent = EffectiveAnimationLock <= 0f && AutoQueue.Action && !IsRecastTimerActive(AutoQueue.Action) && !(blockMovement && _movement.IsMoving());
+        var actionImminent = _hints.LockedFacing(_ws.CurrentTime) == null && EffectiveAnimationLock <= 0f && AutoQueue.Action && !IsRecastTimerActive(AutoQueue.Action) && !(blockMovement && _movement.IsMoving());
         var desiredRotation = CalculateDesiredOrientation(actionImminent);
 
         // execute rotation, if needed
@@ -765,6 +796,11 @@ public sealed unsafe class ActionManagerEx : IDisposable
         var prevAnimLock = _inst->AnimationLock;
         _processPacketActionEffectHook.Original(casterID, casterObj, targetPos, header, effects, targets);
         var currAnimLock = _inst->AnimationLock;
+
+        // World-state observation remains active during player loading,
+        // but manual actions must retain the game's normal animation lock.
+        if (!_gameplayEnabled)
+            return;
 
         if (casterID != UIState.Instance()->PlayerState.EntityId || !ExpectAnimationLockUpdate(header))
         {

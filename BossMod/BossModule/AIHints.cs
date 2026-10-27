@@ -108,8 +108,21 @@ public sealed class AIHints
 
     // forced target
     // this should be set only if either explicitly planned by user or by ai, otherwise it will be annoying to user
-    public Actor? ForcedTarget;
+    public Actor? ForcedTarget
+    {
+        get;
+        set
+        {
+            if (!PreserveTarget)
+                field = value;
+        }
+    }
+    // A mechanic has already made its one-time selection; honor the current
+    // target (including a deliberate empty/friendly target) for this frame.
+    public bool PreserveTarget;
     public Actor? ForcedFocusTarget;
+    // Explicitly drop this unsafe selected target; null ForcedTarget means "leave unchanged".
+    public ulong ClearTargetID;
 
     // low-level forced movement - if set, character will move in specified direction (ignoring casts, uptime, forbidden zones, etc), or stay in place if set to default
     public Vector3? ForcedMovement;
@@ -147,6 +160,20 @@ public sealed class AIHints
     // orientation restrictions (e.g. for gaze attacks): a list of forbidden orientation ranges, now or in near future
     // AI will rotate to face allowed orientation at last possible moment, potentially losing uptime
     public readonly List<(Angle center, Angle halfWidth, DateTime activation)> ForbiddenDirections = [];
+
+    // 组件期望朝向（2026-08-16 方案 A）：驱动"原地转向"（如强制移动预瞄，AI 原地转向到安全朝向、不移动），
+    // 与 gaze 规避（ForbiddenDirections）通道并行——ActionManagerEx 消费时 gaze 优先（保命），其次本字段。
+    // 带过期时间：组件只需在预瞄期每帧写入，消费端按 DesiredFacingExpire 判断生效，避免跨帧残留。
+    public Angle? DesiredFacing;
+    public DateTime DesiredFacingExpire;
+
+    // AI 强制移动即将开始（预瞄末段，2026-08-16 用户要求停手停走）：AIBehaviour 参照 gazeImminent 停走
+    // （NaviTargetPos=null + ForceCancelCastMechanic），组件配合设置 hints.ForceCancelCastMechanic 打断读条
+    public bool ForcedMarchImminent;
+
+    // Only a component explicitly requesting facing + movement/cast lock can
+    // override an action's facing. Expiry and Clear() release it automatically.
+    public Angle? LockedFacing(DateTime now) => ForcedMarchImminent && ForceCancelCastMechanic && DesiredFacingExpire > now ? DesiredFacing : null;
 
     // closest special movement/targeting/action mode, if any
     // activation = when the restriction starts (e.g. bomb detonation), finish = when the restriction ends (e.g. pyretic expires)
@@ -194,8 +221,10 @@ public sealed class AIHints
         PathfindMapObstacles = default;
         Array.Clear(Enemies);
         PotentialTargets.Clear();
+        PreserveTarget = false;
         ForcedTarget = null;
         ForcedFocusTarget = null;
+        ClearTargetID = 0;
         ForcedMovement = null;
         SpinDirection = null;
         InteractWithTarget = null;
@@ -206,6 +235,9 @@ public sealed class AIHints
         Teleporters.Clear();
         RecommendedPositional = default;
         ForbiddenDirections.Clear();
+        DesiredFacing = null;
+        DesiredFacingExpire = default;
+        ForcedMarchImminent = false;
         ImminentSpecialMode = default;
         MisdirectionThreshold = 15f.Degrees();
         PredictedDamage.Clear();

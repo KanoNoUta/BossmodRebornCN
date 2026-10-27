@@ -1,4 +1,4 @@
 ﻿namespace BossMod;
 
-[ConfigDisplay(Name = "Encounter-specific settings", Order = 3)]
+[ConfigDisplay(Name = "副本专用设置", Order = 3)]
 public sealed class ModuleConfig() : ConfigNode();

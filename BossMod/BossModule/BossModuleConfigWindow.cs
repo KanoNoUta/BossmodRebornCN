@@ -16,8 +16,8 @@ public sealed class BossModuleConfigWindow : UIWindow
         _info = info;
         _node = info.ConfigType != null ? Service.Config.Get<ConfigNode>(info.ConfigType) : null;
         _ws = ws;
-        _tabs.Add("Encounter-specific config", DrawEncounterTab);
-        _tabs.Add("Party roles assignment", DrawPartyRolesAssignmentsTab);
+        _tabs.Add("副本专用设置", DrawEncounterTab);
+        _tabs.Add("队伍职能分配", DrawPartyRolesAssignmentsTab);
     }
 
     public override void Draw() => _tabs.Draw();
@@ -34,7 +34,7 @@ public sealed class BossModuleConfigWindow : UIWindow
         if (_node != null)
             ConfigUI.DrawNode(_node, Service.Config, _tree, _ws);
         else if (!_info.HasPrePullHints)
-            ImGui.TextUnformatted("This module does not expose any additional configuration");
+            ImGui.TextUnformatted("此模块没有可配置的选项");
     }
 
     private void DrawPartyRolesAssignmentsTab()

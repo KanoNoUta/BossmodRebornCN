@@ -15,11 +15,11 @@ public sealed class StateMachineWindow : UIWindow
 
     public override void Draw()
     {
-        if (ImGui.CollapsingHeader("Settings"))
+        if (ImGui.CollapsingHeader("设置"))
         {
-            ImGui.Checkbox("Draw unnamed nodes", ref _col.DrawUnnamedNodes);
-            ImGui.Checkbox("Draw tankbuster nodes only", ref _col.DrawTankbusterNodesOnly);
-            ImGui.Checkbox("Draw raidwide nodes only", ref _col.DrawRaidwideNodesOnly);
+            ImGui.Checkbox("绘制未命名节点", ref _col.DrawUnnamedNodes);
+            ImGui.Checkbox("仅显示死刑节点", ref _col.DrawTankbusterNodesOnly);
+            ImGui.Checkbox("仅显示团队AOE节点", ref _col.DrawRaidwideNodesOnly);
         }
 
         _timeline.CurrentTime = null;

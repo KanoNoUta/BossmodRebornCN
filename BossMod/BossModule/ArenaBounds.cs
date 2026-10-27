@@ -319,8 +319,10 @@ public sealed class ArenaBoundsCustom : ArenaBounds
     private readonly float offset;
     public readonly WPos Center;
 
-    public ArenaBoundsCustom(Shape[] UnionShapes, Shape[]? DifferenceShapes = null, Shape[]? AdditionalShapes = null, float MapResolution = 0.5f, float ScaleFactor = 1f, bool AllowObstacleMap = false, float Offset = default, bool AdjustForHitboxInwards = false, bool AdjustForHitboxOutwards = false, ArenaProjectionLayer[]? WorldProjectionLayers = null, Shape[]? ArenaStencilExclusions = null, bool AllowDrawing3DArenaBounds = true)
-    : base(BuildBounds(UnionShapes, DifferenceShapes ?? [], AdditionalShapes ?? [], ScaleFactor, AdjustForHitboxInwards, AdjustForHitboxOutwards, out var poly, out var center, out var halfWidth, out var halfHeight), MapResolution, ScaleFactor, AllowObstacleMap, AllowDrawing3DArenaBounds)
+    // CenterOverride：可选显式指定 bounds 中心（多边形顶点同步平移以匹配），默认 null=按形状包围盒自动计算。
+    // 用途（2026-08-07 FTMN4）：不同阶段场地形状包围盒中心不同（3 平台 vs 6 平台），固定中心避免雷达视图切换时跳动。
+    public ArenaBoundsCustom(Shape[] UnionShapes, Shape[]? DifferenceShapes = null, Shape[]? AdditionalShapes = null, float MapResolution = 0.5f, float ScaleFactor = 1f, bool AllowObstacleMap = false, float Offset = default, bool AdjustForHitboxInwards = false, bool AdjustForHitboxOutwards = false, ArenaProjectionLayer[]? WorldProjectionLayers = null, Shape[]? ArenaStencilExclusions = null, bool AllowDrawing3DArenaBounds = true, WPos? CenterOverride = null)
+    : base(BuildBounds(UnionShapes, DifferenceShapes ?? [], AdditionalShapes ?? [], ScaleFactor, AdjustForHitboxInwards, AdjustForHitboxOutwards, CenterOverride, out var poly, out var center, out var halfWidth, out var halfHeight), MapResolution, ScaleFactor, AllowObstacleMap, AllowDrawing3DArenaBounds)
     {
         Center = center;
         HalfWidth = halfWidth + Offset;
@@ -334,9 +336,9 @@ public sealed class ArenaBoundsCustom : ArenaBounds
         offset = Offset;
     }
 
-    private static float BuildBounds(Shape[] unionShapes, Shape[]? differenceShapes, Shape[]? additionalShapes, float scalefactor, bool adjustForHitboxInwards, bool adjustForHitboxOutwards, out RelSimplifiedComplexPolygon poly, out WPos center, out float halfWidth, out float halfHeight)
+    private static float BuildBounds(Shape[] unionShapes, Shape[]? differenceShapes, Shape[]? additionalShapes, float scalefactor, bool adjustForHitboxInwards, bool adjustForHitboxOutwards, WPos? centerOverride, out RelSimplifiedComplexPolygon poly, out WPos center, out float halfWidth, out float halfHeight)
     {
-        var properties = CalculatePolygonProperties(unionShapes, differenceShapes ?? [], additionalShapes ?? [], adjustForHitboxInwards, adjustForHitboxOutwards);
+        var properties = CalculatePolygonProperties(unionShapes, differenceShapes ?? [], additionalShapes ?? [], adjustForHitboxInwards, adjustForHitboxOutwards, centerOverride);
         center = properties.Center;
         halfWidth = properties.HalfWidth;
         halfHeight = properties.HalfHeight;
@@ -344,7 +346,7 @@ public sealed class ArenaBoundsCustom : ArenaBounds
         return scalefactor == 1f ? properties.Radius : properties.Radius / scalefactor;
     }
 
-    private static (WPos Center, float HalfWidth, float HalfHeight, float Radius, RelSimplifiedComplexPolygon Poly) CalculatePolygonProperties(Shape[] unionShapes, Shape[] differenceShapes, Shape[] additionalShapes, bool adjustForHitboxInwards, bool adjustForHitboxOutwards)
+    private static (WPos Center, float HalfWidth, float HalfHeight, float Radius, RelSimplifiedComplexPolygon Poly) CalculatePolygonProperties(Shape[] unionShapes, Shape[] differenceShapes, Shape[] additionalShapes, bool adjustForHitboxInwards, bool adjustForHitboxOutwards, WPos? centerOverride)
     {
         var unionPolygons = ParseShapes(unionShapes);
         var differencePolygons = ParseShapes(differenceShapes);
@@ -363,6 +365,25 @@ public sealed class ArenaBoundsCustom : ArenaBounds
         var maxDistZ = Math.Max(Math.Abs(maxZ - centerZ), Math.Abs(minZ - centerZ));
         var halfWidth = (maxX - minX) * 0.5f;
         var halfHeight = (maxZ - minZ) * 0.5f;
+
+        // 可选显式中心：多边形整体平移到指定中心（保持世界坐标几何不变）
+        // 3 平台偏移修复（2026-08-09 用户实测）：顶点在上面已减自动 center 转局部系，
+        // 此处应再减 shift 使局部=原世界-新中心；原 += shift 使渲染世界=原+2*shift（如 FTMN4 3 平台整体北移 7.5y，6 平台 shift=0 不受影响）
+        if (centerOverride != null && centerOverride.Value != center)
+        {
+            var shift = centerOverride.Value - center;
+            var parts = combinedPoly.Parts;
+            for (var i = 0; i < parts.Count; ++i)
+            {
+                var verts = CollectionsMarshal.AsSpan(parts[i].Vertices);
+                for (var j = 0; j < verts.Length; ++j)
+                {
+                    verts[j] -= shift;
+                }
+            }
+
+            center = centerOverride.Value;
+        }
 
         return (center, halfWidth, halfHeight, Math.Max(maxDistX, maxDistZ), combinedPoly);
 

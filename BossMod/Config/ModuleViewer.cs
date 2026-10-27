@@ -267,7 +267,7 @@ public sealed class ModuleViewer(PlanDatabase? planDB, WorldState ws) : IDisposa
     private void DrawFilters()
     {
         ImGui.AlignTextToFramePadding();
-        ImGui.TextUnformatted("Search:");
+        ImGui.TextUnformatted("搜索：");
         ImGui.SameLine();
         ImGui.SetNextItemWidth(-1f);
         DrawSearchBar();
@@ -281,12 +281,12 @@ public sealed class ModuleViewer(PlanDatabase? planDB, WorldState ws) : IDisposa
 
     private void DrawSearchBar()
     {
-        ImGui.InputTextWithHint("##search", "e.g. \"Ultimate\"", ref _searchText, 100, ImGuiInputTextFlags.CallbackCompletion);
+        ImGui.InputTextWithHint("##search", "例如 \"绝境战\"", ref _searchText, 100, ImGuiInputTextFlags.CallbackCompletion);
 
         if (ImGui.IsItemHovered() && !ImGui.IsItemFocused())
         {
             ImGui.BeginTooltip();
-            ImGui.Text("Type here to search for any specific instance by its respective title.");
+            ImGui.Text("在此输入以按标题搜索特定副本。");
             ImGui.EndTooltip();
         }
     }
@@ -343,7 +343,7 @@ public sealed class ModuleViewer(PlanDatabase? planDB, WorldState ws) : IDisposa
             }
             if (ImGui.IsItemHovered())
             {
-                ImGui.SetTooltip(anyEnabled != allEnabled ? "Some modules in this expansion are disabled. Click to enable all." : enabled ? "Disable all modules in this expansion." : "Enable all modules in this expansion.");
+                ImGui.SetTooltip(anyEnabled != allEnabled ? "该资料片中有模块被禁用，点击全部启用。" : enabled ? "禁用该资料片的全部模块。" : "启用该资料片的全部模块。");
             }
 
             ImGui.TableNextColumn();
@@ -397,7 +397,7 @@ public sealed class ModuleViewer(PlanDatabase? planDB, WorldState ws) : IDisposa
             }
             if (ImGui.IsItemHovered())
             {
-                ImGui.SetTooltip(anyEnabled != allEnabled ? "Some modules in this category are disabled. Click to enable all." : enabled ? "Disable all modules in this category." : "Enable all modules in this category.");
+                ImGui.SetTooltip(anyEnabled != allEnabled ? "该类型中有模块被禁用，点击全部启用。" : enabled ? "禁用该类型的全部模块。" : "启用该类型的全部模块。");
             }
 
             ImGui.TableNextColumn();
@@ -491,7 +491,7 @@ public sealed class ModuleViewer(PlanDatabase? planDB, WorldState ws) : IDisposa
                     }
                     if (ImGui.IsItemHovered())
                     {
-                        ImGui.SetTooltip(groupAnyEnabled != groupAllEnabled ? "Some modules in this group are disabled. Click to enable all." : groupEnabled ? "Disable all modules in this group." : "Enable all modules in this group.");
+                        ImGui.SetTooltip(groupAnyEnabled != groupAllEnabled ? "该分组中有模块被禁用，点击全部启用。" : groupEnabled ? "禁用该分组的全部模块。" : "启用该分组的全部模块。");
                     }
 
                     ImGui.TableNextColumn();
@@ -520,7 +520,7 @@ public sealed class ModuleViewer(PlanDatabase? planDB, WorldState ws) : IDisposa
                             }
                             if (ImGui.IsItemHovered())
                             {
-                                ImGui.SetTooltip(moduleEnabled ? "Disable this module." : "Enable this module.");
+                                ImGui.SetTooltip(moduleEnabled ? "禁用此模块。" : "启用此模块。");
                             }
 
                             ImGui.TableNextColumn();
@@ -605,7 +605,7 @@ public sealed class ModuleViewer(PlanDatabase? planDB, WorldState ws) : IDisposa
                 groupId |= module.GroupID;
                 var mcRow = Service.LuminaRow<ContentFinderCondition>(module.GroupID)!.Value;
                 var mcSort = uint.Parse(mcRow.ShortCode.ToString().AsSpan(3), CultureInfo.InvariantCulture); // 'aozNNN'
-                return new($"Stage {mcSort}: {FixCase(mcRow.Name)}", groupId, mcSort);
+                return new($"第{mcSort}关: {FixCase(mcRow.Name)}", groupId, mcSort);
             case BossModuleInfo.GroupType.CrucibleOfTheUnbroken:
                 groupId |= module.GroupID;
                 var bmRow = Service.LuminaRow<ContentFinderCondition>(module.GroupID)!.Value;
@@ -618,7 +618,7 @@ public sealed class ModuleViewer(PlanDatabase? planDB, WorldState ws) : IDisposa
                 }
                 return new(bmName, groupId, bmSort);
             case BossModuleInfo.GroupType.RemovedUnreal:
-                return new("Removed Content", groupId, groupId);
+                return new("已移除内容", groupId, groupId);
             case BossModuleInfo.GroupType.BaldesionArsenal:
                 return new("Baldesion Arsenal", groupId, groupId);
             case BossModuleInfo.GroupType.CastrumLacusLitore:
@@ -653,9 +653,9 @@ public sealed class ModuleViewer(PlanDatabase? planDB, WorldState ws) : IDisposa
                 groupId |= module.GroupID;
                 return new(FixCase(Service.LuminaRow<ContentFinderCondition>(module.GroupID)!.Value.Name), groupId, groupId);
             case BossModuleInfo.GroupType.GoldSaucer:
-                return new("Gold Saucer", groupId, groupId);
+                return new("金碟游乐场", groupId, groupId);
             default:
-                return new("Uncategorized", groupId, groupId);
+                return new("未分组", groupId, groupId);
         }
     }
 
@@ -776,7 +776,7 @@ public sealed class ModuleViewer(PlanDatabase? planDB, WorldState ws) : IDisposa
         using var tooltip = ImRaii.Tooltip();
         using var wrap = ImRaii.TextWrapPos(ImGui.GetFontSize() * 35f);
         var maturityDescription = GeneratedEnumMetadata.For(info.Maturity).Attribute<PropertyDisplayAttribute>()?.Label ?? info.Maturity.ToString();
-        ImGui.TextUnformatted("Maturity: ");
+        ImGui.TextUnformatted("成熟度：");
         ImGui.SameLine(0f, 0f);
         using (ImRaii.PushColor(ImGuiCol.Text, MaturityColor(info.Maturity)))
         {
@@ -787,10 +787,10 @@ public sealed class ModuleViewer(PlanDatabase? planDB, WorldState ws) : IDisposa
 
     private static string BuildModuleHelpText(BossModuleRegistry.Info info)
     {
-        var planning = info.PlanLevel > 0 ? $"L{info.PlanLevel}" : "not supported";
+        var planning = info.PlanLevel > 0 ? $"L{info.PlanLevel}" : "不支持";
         return info.Contributors.Length > 0
-            ? $"Cooldown planning: {planning}\nContributors: {info.Contributors}\n"
-            : $"Cooldown planning: {planning}\n";
+            ? $"冷却规划: {planning}\n贡献者: {info.Contributors}\n"
+            : $"冷却规划: {planning}\n";
     }
 
     private void ModulePlansPopup(BossModuleRegistry.Info info)
@@ -808,7 +808,7 @@ public sealed class ModuleViewer(PlanDatabase? planDB, WorldState ws) : IDisposa
             for (var i = 0; i < count; ++i)
             {
                 var plan = plansL[i];
-                if (ImGui.Selectable($"Edit {cls} '{plan.Name}' ({plan.Guid})"))
+                if (ImGui.Selectable($"编辑 {cls} '{plan.Name}' ({plan.Guid})"))
                 {
                     UIPlanDatabaseEditor.StartPlanEditor(_planDB, plan);
                 }
@@ -818,7 +818,7 @@ public sealed class ModuleViewer(PlanDatabase? planDB, WorldState ws) : IDisposa
         var player = _ws.Party.Player();
         if (player != null)
         {
-            if (ImGui.Selectable($"New plan for {player.Class}..."))
+            if (ImGui.Selectable($"为 {player.Class} 新建规划..."))
             {
                 var plans = mplans.GetOrAdd(player.Class);
                 var plan = new Plan($"New {plans.Plans.Count + 1}", info.ModuleType) { Guid = Guid.NewGuid().ToString(), Class = player.Class, Level = info.PlanLevel };

@@ -4,19 +4,19 @@ public static class BossModuleInfo
 {
     public enum Maturity
     {
-        [PropertyDisplay("Dummy modules, dev work only.")]
+        [PropertyDisplay("测试模块，仅用于开发。")]
         Dummy,
 
-        [PropertyDisplay("Work in progress; might be incomplete or have severe bugs.")]
+        [PropertyDisplay("开发中；可能不完整或存在严重问题。")]
         WIP,
 
-        [PropertyDisplay("Third-party contributed module that wasn't verified by the plugin author; might be working fine, might have any sorts of inconsistencies with other modules - YMMV.")]
+        [PropertyDisplay("未经插件作者验证的第三方贡献模块；可能正常工作，也可能与其他模块存在各种不一致，请自行判断。")]
         Contributed,
 
-        [PropertyDisplay("First-party module created by the plugin author, or a third-party contributed module that was thoroughly verified.")]
+        [PropertyDisplay("插件作者创建的官方模块，或经过充分验证的第三方贡献模块。")]
         Verified,
 
-        [PropertyDisplay("Module that has been verified to work well with AI enabled.")]
+        [PropertyDisplay("已验证在启用 AI 时也能良好工作的模块。")]
         AISupport
     }
 

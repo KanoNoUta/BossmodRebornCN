@@ -65,7 +65,7 @@ public sealed class ReplayManager(RotationDatabase rotationDB, string logDirecto
         public void Show()
         {
             Analysis ??= new([.. Replays.Where(r => r.Replay.IsCompletedSuccessfully && r.Replay.Result.Ops.Count > 0).Select(r => r.Replay.Result)]);
-            Window ??= new($"Multiple logs: {Identifier}", Analysis.Draw, false, new(1200f, 800f));
+            Window ??= new($"多日志分析: {Identifier}", Analysis.Draw, false, new(1200f, 800f));
             Window.IsOpen = true;
         }
     }

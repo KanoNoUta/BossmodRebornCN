@@ -4,21 +4,21 @@ using System.Text.Json.Serialization;
 
 namespace BossMod;
 
-[ConfigDisplay(Name = "Boss modules and radar", Order = 1)]
+[ConfigDisplay(Name = "首领模块与雷达", Order = 1)]
 public sealed class BossModuleConfig : ConfigNode
 {
     public bool RadarResize;
 
     public override void DrawCustom(UITree tree, WorldState ws)
     {
-        if (ImGui.Button("Recenter Window"))
+        if (ImGui.Button("窗口重新居中"))
         {
             Service.BossModWindow?.RecenterWindow();
         }
     }
 
     // boss module settings
-    [PropertyDisplay("Minimal maturity for the module to be loaded", tooltip: "Some modules will have the \"WIP\" status and will not automatically load unless you change this")]
+    [PropertyDisplay("加载模块所需的最低完成度", tooltip: "部分模块处于“开发中”状态，除非修改此设置，否则不会自动加载。")]
     public BossModuleInfo.Maturity MinMaturity = BossModuleInfo.Maturity.Contributed;
 
     // Modules explicitly disabled from Supported fights. Primary actor OIDs are used as unique module IDs.
@@ -26,107 +26,107 @@ public sealed class BossModuleConfig : ConfigNode
     [JsonIgnore]
     internal HashSet<uint>? _disabledModuleOIDs;
 
-    [PropertyDisplay("Allow modules to automatically use actions", tooltip: "Example: modules can automatically use anti-knockback abilities before a knockback happens")]
+    [PropertyDisplay("允许模块自动使用技能", tooltip: "例如：模块可以在击退发生前自动使用防击退技能。")]
     public bool AllowAutomaticActions = true;
 
-    [PropertyDisplay("Show testing radar and hint window", tooltip: "Useful for configuring your radar and hint windows without being inside of a boss encounter", separator: true, depends: nameof(EnableRadar))]
+    [PropertyDisplay("显示测试雷达和提示窗口", tooltip: "无需进入首领战即可调整雷达和提示窗口。", separator: true, depends: nameof(EnableRadar))]
     public bool ShowDemo = false;
 
     // radar window settings
-    [PropertyDisplay("Enable radar", separator: true)]
+    [PropertyDisplay("启用雷达", separator: true)]
     public bool EnableRadar = true;
 
-    [PropertyDisplay("Enable projecting radar into the 3D world")]
+    [PropertyDisplay("将雷达投影到 3D 场景中")]
     public bool ProjectRadarInto3DWorld = false;
 
-    [PropertyDisplay("Show actor triangles in the 3D world", tooltip: "Show ordinary actor triangles. Mechanic markers, including knockback destinations, remain visible when this is disabled.", depends: nameof(ProjectRadarInto3DWorld))]
+    [PropertyDisplay("在 3D 场景中显示角色三角标记", tooltip: "显示普通角色的三角标记。关闭后机制标记（包括击退落点）仍会显示。", depends: nameof(ProjectRadarInto3DWorld))]
     public bool ShowActorTrianglesIn3DWorld = true;
 
-    [PropertyDisplay("Include drawing arena outline into the 3D world", tooltip: "If projecting the radar into the 3D world is enabled, the outline can also be drawn", depends: nameof(ProjectRadarInto3DWorld))]
+    [PropertyDisplay("在 3D 场景中绘制场地边界", tooltip: "开启雷达 3D 投影时，也可以绘制场地边界。", depends: nameof(ProjectRadarInto3DWorld))]
     public bool EnableArenaOutlineIn3DWorld = true;
 
-    [PropertyDisplay("Allow drawing text and icon billboards into the 3D world", tooltip: "If projecting the radar into the 3D world is enabled, the outline can also be drawn", depends: nameof(ProjectRadarInto3DWorld))]
+    [PropertyDisplay("在 3D 场景中绘制文字和图标标牌", tooltip: "开启雷达 3D 投影时，也可以绘制文字和图标标牌。", depends: nameof(ProjectRadarInto3DWorld))]
     public bool EnableTextIconBillboards = true;
 
-    [PropertyDisplay("Billboard height offset", tooltip: "How many yalms billboards should appear above ground. Includes gazes, text and icons.", depends: nameof(ProjectRadarInto3DWorld))]
+    [PropertyDisplay("标牌离地高度", tooltip: "标牌显示在地面上方多少亚姆，包括背对、文字和图标。", depends: nameof(ProjectRadarInto3DWorld))]
     [PropertySlider(0f, 20f, Speed = 0.1f, Logarithmic = true)]
     public float BillboardHeightOffset = 5f;
 
-    [PropertyDisplay("Text billboard font size", tooltip: "Change text size of 3D world billboards", depends: nameof(ProjectRadarInto3DWorld))]
+    [PropertyDisplay("文字标牌字号", tooltip: "调整 3D 场景中文字标牌的大小。", depends: nameof(ProjectRadarInto3DWorld))]
     [PropertySlider(17f, 250f, Speed = 0.5f, Logarithmic = true)]
     public float TextBillboardFontSize = 110f;
 
-    [PropertyDisplay("Icon billboard font size", tooltip: "Change icon size of 3D world billboards", separator: true, depends: nameof(ProjectRadarInto3DWorld))]
+    [PropertyDisplay("图标标牌字号", tooltip: "调整 3D 场景中图标标牌的大小。", separator: true, depends: nameof(ProjectRadarInto3DWorld))]
     [PropertySlider(17f, 250f, Speed = 0.5f, Logarithmic = true)]
     public float IconBillboardFontSize = 110f;
 
-    [PropertyDisplay("Lock radar and hint window movement and mouse interaction")]
+    [PropertyDisplay("锁定雷达和提示窗口的位置及鼠标交互")]
     public bool Lock = false;
 
-    [PropertyDisplay("Transparent radar window background", tooltip: "Removes the black window around the radar; this will not work if you move the radar to a different monitor")]
+    [PropertyDisplay("雷达窗口背景透明", tooltip: "移除雷达周围的黑色窗口背景；如果将雷达移到其他显示器，此功能可能失效。")]
     public bool TrishaMode = true;
 
-    [PropertyDisplay("Add opaque background to the arena in the radar")]
+    [PropertyDisplay("为雷达场地添加不透明背景")]
     public bool OpaqueArenaBackground = true;
 
-    [PropertyDisplay("Show outlines and shadows on various radar markings")]
+    [PropertyDisplay("显示雷达标记的轮廓和阴影")]
     public bool ShowOutlinesAndShadows = true;
 
-    [PropertyDisplay("Radar arena scale factor", tooltip: "Scale of the arena inside of the radar window")]
+    [PropertyDisplay("雷达场地缩放比例", tooltip: "雷达窗口内场地的缩放比例。")]
     [PropertySlider(0.1f, 10f, Speed = 0.1f, Logarithmic = true)]
     public float ArenaScale = 1f;
 
-    [PropertyDisplay("Radar element thickness scale factor", tooltip: "Globally scales the outline thickness of radar elements")]
+    [PropertyDisplay("雷达元素线条粗细比例", tooltip: "统一缩放雷达元素的轮廓粗细。")]
     [PropertySlider(0.1f, 10f, Speed = 0.1f, Logarithmic = true)]
     public float ThicknessScale = 1f;
 
-    [PropertyDisplay("Rotate radar to match camera orientation")]
+    [PropertyDisplay("旋转雷达以匹配镜头方向")]
     public bool RotateArena = true;
 
-    [PropertyDisplay("Rotate map by 180° if rotating map is off")]
+    [PropertyDisplay("关闭地图旋转时将地图旋转 180°")]
     public bool FlipArena = false;
 
-    [PropertyDisplay("Give radar extra space for rotations", tooltip: "If you are using the above setting, you can give the radar extra space on the sides before the edges are clipped in order to account for rotating your camera during an encounter or to give the cardinal directions space.")]
+    [PropertyDisplay("为雷达旋转预留额外空间", tooltip: "使用上方设置时，可在雷达边缘裁切前预留额外空间，避免战斗中旋转镜头或显示方位文字时内容被裁掉。")]
     [PropertySlider(1f, 2f, Speed = 0.1f, Logarithmic = true)]
     public float SlackForRotations = 1.5f;
 
-    [PropertyDisplay("Show arena border in radar")]
+    [PropertyDisplay("在雷达中显示场地边界")]
     public bool ShowBorder = true;
 
-    [PropertyDisplay("Change arena border color if player is at risk", tooltip: "Changes the white border to red when you are standing somewhere you are likely to be hit by a mechanic")]
+    [PropertyDisplay("玩家处于危险时改变场地边界颜色", tooltip: "当玩家站在可能被机制命中的位置时，将白色边界改为红色。")]
     public bool ShowBorderRisk = true;
 
-    [PropertyDisplay("Pulse screen edges when player is at risk", tooltip: "A glow pulses in the risky arena border color (Enemy color) while a player warning is active. Works independently of the radar and 3D projection settings.")]
+    [PropertyDisplay("玩家处于危险时屏幕边缘闪烁", tooltip: "玩家有警告时，屏幕边缘以危险场地边界颜色（敌人颜色）脉动发光。不依赖雷达和 3D 投影设置。")]
     public bool ShowScreenRiskBorder = false;
 
-    [PropertyDisplay("Screen danger pulse intensity", depends: nameof(ShowScreenRiskBorder))]
+    [PropertyDisplay("屏幕危险闪烁强度", depends: nameof(ShowScreenRiskBorder))]
     [PropertySlider(0f, 10f, Speed = 0.1f)]
     public float ScreenRiskBorderIntensity = 2.5f;
 
-    [PropertyDisplay("Show cardinal direction names on radar")]
+    [PropertyDisplay("在雷达中显示方位名称")]
     public bool ShowCardinals = false;
 
-    [PropertyDisplay("Cardinal direction font size", depends: nameof(ShowCardinals))]
+    [PropertyDisplay("方位名称字号", depends: nameof(ShowCardinals))]
     [PropertySlider(0.1f, 100f, Speed = 1f)]
     public float CardinalsFontSize = 17f;
 
-    [PropertyDisplay("Show waymarks on radar")]
+    [PropertyDisplay("在雷达中显示场地标点")]
     public bool ShowWaymarks = false;
 
-    [PropertyDisplay("Waymark font size", depends: nameof(ShowWaymarks))]
+    [PropertyDisplay("场地标点字号", depends: nameof(ShowWaymarks))]
     [PropertySlider(0.1f, 100f, Speed = 1f)]
     public float WaymarkFontSize = 22f;
 
-    [PropertyDisplay("Show signs on radar ('attack', 'bind', 'ignore', and shape markers)")]
+    [PropertyDisplay("在雷达中显示目标标记（攻击、止步、禁止及形状标记）")]
     public bool ShowSigns = false;
 
-    [PropertyDisplay("Always show all alive party members")]
+    [PropertyDisplay("始终显示所有存活的队员")]
     public bool ShowIrrelevantPlayers = false;
 
-    [PropertyDisplay("Show role-based colors on otherwise uncolored players in the radar")]
+    [PropertyDisplay("按职能为雷达中未着色的玩家上色")]
     public bool ColorPlayersBasedOnRole = false;
 
-    [PropertyDisplay("Always show focus targeted party member", separator: true)]
+    [PropertyDisplay("始终显示被设为焦点目标的队员", separator: true)]
     public bool ShowFocusTargetPlayer = false;
 
     [PropertyDisplay("Actor triangle scale factor")]
@@ -134,7 +134,7 @@ public sealed class BossModuleConfig : ConfigNode
     public float ActorScale = 1f;
 
     // hint window settings
-    [PropertyDisplay("Show pre-fight encounter hint popup", tooltip: "Shows encounter-specific notes before a pull. Individual encounters can be hidden permanently from the popup itself and re-enabled from that encounter's config window.")]
+    [PropertyDisplay("开战前显示副本提示弹窗", tooltip: "开怪前显示该战斗的专属说明。可在弹窗中对单场战斗永久隐藏，并在该战斗的配置窗口中重新启用。")]
     public bool ShowPrePullHints = true;
 
     // Persisted separately from module-specific config so every encounter can support "Never show again". Primary actor OIDs are used as unique module IDs.
@@ -143,29 +143,29 @@ public sealed class BossModuleConfig : ConfigNode
     [JsonIgnore]
     internal HashSet<uint>? _suppressedPrePullHintOIDs;
 
-    [PropertyDisplay("Show text hints in separate window", tooltip: "Separates the radar window from the hints window, allowing you to reposition the hints window")]
+    [PropertyDisplay("在独立窗口中显示文字提示", tooltip: "将提示窗口与雷达窗口分离，以便单独调整提示窗口的位置。")]
     public bool HintsInSeparateWindow = false;
 
-    [PropertyDisplay("Make separate hints window transparent")]
+    [PropertyDisplay("使独立提示窗口透明")]
     public bool HintsInSeparateWindowTransparent = false;
 
-    [PropertyDisplay("Show mechanic sequence and timer hints")]
+    [PropertyDisplay("显示机制顺序和计时提示")]
     public bool ShowMechanicTimers = true;
 
-    [PropertyDisplay("Show raidwide hints")]
+    [PropertyDisplay("显示全队提示")]
     public bool ShowGlobalHints = true;
 
-    [PropertyDisplay("Show player hints and warnings", separator: true)]
+    [PropertyDisplay("显示玩家提示和警告", separator: true)]
     public bool ShowPlayerHints = true;
 
     // misc. settings
-    [PropertyDisplay("Show movement hints in world", tooltip: "Not used very much, but can show you arrows in the game world to indicate where to move for certain mechanics")]
+    [PropertyDisplay("在游戏世界中显示移动提示", tooltip: "部分机制会在游戏世界中显示箭头，指示应移动到的位置。")]
     public bool ShowWorldArrows = false;
 
-    [PropertyDisplay("Show melee range indicator")]
+    [PropertyDisplay("显示近战范围指示器")]
     public bool ShowMeleeRangeIndicator = false;
 
-    [PropertyDisplay("Maximum load distance", tooltip: "Maximum load distance in yalms (clamped to 100yalms for safety). If the boss is farther away than this, then a module will not be loaded or unloaded if already active.")]
+    [PropertyDisplay("最大加载距离", tooltip: "最大加载距离，单位为亚姆（出于安全最低为 100 亚姆）。首领超过此距离时不会加载模块，已加载的模块也不会卸载。")]
     [PropertySlider(100f, 500f, Speed = 0.1f, Logarithmic = true)]
     public float MaxLoadDistance = 500f;
 

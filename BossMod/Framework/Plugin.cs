@@ -16,11 +16,20 @@ namespace BossMod;
 
 public sealed class Plugin : IAsyncDalamudPlugin
 {
-    public static string Name => "BossMod Reborn";
+#if BMR_CRUCIBLE_TEST
+    public static string Name => "BossModReborn 斗兽版本 测试";
+#else
+    public static string Name => "BossModReborn 斗兽版本";
+#endif
 
     private readonly IDalamudPluginInterface _dalamud;
     private readonly ICommandManager CommandManager;
     private readonly string _gameVersion = "unknown";
+    private bool _initialized;
+    private bool _initializationAttempted;
+    private bool _runtimeDisposed;
+    private bool _gameplayEnabled;
+    private bool _commandRegistered;
 
     private RotationDatabase _rotationDB = null!;
     private WorldState _ws = null!;
@@ -42,6 +51,8 @@ public sealed class Plugin : IAsyncDalamudPlugin
     private TimeSpan _prevUpdateTime;
     private DateTime _throttleJump;
     private DateTime _throttleInteract;
+    private readonly TargetSelectionOnce _targetSelection = new();
+    private readonly MechanicTargetSelection _mechanicTargets = new();
     private DateTime _throttleFateSync;
     private DateTime _throttleLeaveDuty;
     private WorldOverlayNode? _worldOverlayNode;
@@ -85,6 +96,10 @@ public sealed class Plugin : IAsyncDalamudPlugin
 
     public async Task LoadAsync(CancellationToken cancellationToken)
     {
+#if BMR_CRUCIBLE_TEST
+        if (_dalamud.InstalledPlugins.Any(p => p.IsLoaded && p.InternalName is "BossModReborn" or "BossMod"))
+            throw new InvalidOperationException("请先禁用原版 BossMod / BossModReborn，再启用 BossMod 斗兽版本 测试。两版共用战斗接口，不能同时启用。");
+#endif
         await Task.Run(InteropGenerator.Runtime.Resolver.GetInstance.Resolve, cancellationToken);
 
         await Task.Run(() =>
@@ -97,7 +112,21 @@ public sealed class Plugin : IAsyncDalamudPlugin
                 new(_dalamud.AssemblyLocation.DirectoryName! + "/DefaultRotationPresets.json"));
         }, cancellationToken);
 
-        await Service.Framework.RunOnFrameworkThread(InitOnFrameworkThread);
+        await Service.Framework.RunOnFrameworkThread(() =>
+        {
+            _commandRegistered = CommandManager.AddHandler("/bmr", new CommandInfo((cmd, args) =>
+            {
+                if (!_initialized || _runtimeDisposed) return;
+                OnCommand(cmd, args);
+            }) { HelpMessage = "Show BossMod settings" });
+            if (!_commandRegistered)
+                throw new InvalidOperationException("/bmr 已被其他插件使用，请禁用另一版本的 BossMod 后重试。");
+            _dalamud.UiBuilder.DisableAutomaticUiHide = true;
+            _dalamud.UiBuilder.Draw += DrawUI;
+            _dalamud.UiBuilder.OpenMainUi += OpenMainUI;
+            _dalamud.UiBuilder.OpenConfigUi += OpenMainUI;
+            Service.Framework.Update += OnFrameworkUpdate;
+        });
     }
 
     private unsafe void InitOnFrameworkThread()
@@ -110,8 +139,6 @@ public sealed class Plugin : IAsyncDalamudPlugin
         Dx11ArenaRenderer.SetWorldOverlayNode(_worldOverlayNode);
 
         Service.Config.Modified.Subscribe(() => Task.Run(() => Service.Config.SaveToFile(_dalamud.ConfigFile)));
-
-        CommandManager.AddHandler("/bmr", new CommandInfo(OnCommand) { HelpMessage = "Show boss mod settings UI" });
 
         ActionDefinitions.Instance.UnlockCheck = QuestUnlocked; // ensure action definitions are initialized and set unlock check functor (we don't really store the quest progress in clientstate, for now at least)
 
@@ -146,10 +173,8 @@ public sealed class Plugin : IAsyncDalamudPlugin
         _wndRotation = new(_rotation, _amex, () => OpenConfigUI("Autorotation presets"));
         _wndDebug = new(_ws, _rotation, _zonemod, _amex, _movementOverride, _hintsBuilder, _dalamud, _rsr);
 
-        _dalamud.UiBuilder.DisableAutomaticUiHide = true;
-        _dalamud.UiBuilder.Draw += DrawUI;
-        _dalamud.UiBuilder.OpenMainUi += () => OpenConfigUI();
-        _dalamud.UiBuilder.OpenConfigUi += () => OpenConfigUI();
+        _initialized = true;
+        _gameplayEnabled = true;
     }
 
     public async ValueTask DisposeAsync()
@@ -157,35 +182,38 @@ public sealed class Plugin : IAsyncDalamudPlugin
         await Service.Framework.RunOnFrameworkThread(() =>
         {
             _dalamud.UiBuilder.Draw -= DrawUI;
+            _dalamud.UiBuilder.OpenMainUi -= OpenMainUI;
+            _dalamud.UiBuilder.OpenConfigUi -= OpenMainUI;
             Service.Condition.ConditionChange -= OnConditionChanged;
+            Service.Framework.Update -= OnFrameworkUpdate;
             Dx11ArenaRenderer.SetWorldOverlayNode(null);
             _worldOverlayNode?.Dispose();
             _worldOverlayNode = null;
             Dx11ArenaRenderer.Shutdown();
         });
+        if (_commandRegistered)
+        {
+            CommandManager.RemoveHandler("/bmr");
+            _commandRegistered = false;
+        }
+        DisposeRuntime();
+    }
+
+    private void DisposeRuntime()
+    {
+        if (_runtimeDisposed || !_initializationAttempted)
+            return;
+        _runtimeDisposed = true;
+        Service.Condition.ConditionChange -= OnConditionChanged;
         ReplayVisualization.GaugeVisualizer.Dispose();
-        _wndDebug.Dispose();
-        _wndRotation.Dispose();
-        _wndReplay.Dispose();
-        _wndZone.Dispose();
-        _wndBossmodPrePullHints.Dispose();
-        _wndBossmodHints.Dispose();
-        _wndBossmod.Dispose();
-        _configUI.Dispose();
-        _partyRoles.Dispose();
-        _mbox.Dispose();
-        _dtr.Dispose();
-        _ipc.Dispose();
-        _ai.Dispose();
-        _rotation.Dispose();
-        _wsSync.Dispose();
-        _amex.Dispose();
-        _movementOverride.Dispose();
-        _hintsBuilder.Dispose();
-        _zonemod.Dispose();
-        _bossmod.Dispose();
-        _rsr.Dispose();
-        CommandManager.RemoveHandler("/bmr");
+        IDisposable?[] resources = [_wndDebug, _wndRotation, _wndReplay, _wndZone, _wndBossmodPrePullHints, _wndBossmodHints,
+            _wndBossmod, _configUI, _partyRoles, _mbox, _dtr, _ipc, _ai, _rotation, _wsSync,
+            _amex, _movementOverride, _hintsBuilder, _zonemod, _bossmod, _rsr];
+        foreach (var resource in resources)
+        {
+            try { resource?.Dispose(); }
+            catch (Exception ex) { Service.Logger.Error(ex, "Failed to dispose BossMod runtime resource"); }
+        }
         GarbageCollection();
     }
 
@@ -305,35 +333,108 @@ public sealed class Plugin : IAsyncDalamudPlugin
         _ = new UISimpleWindow("BossModReborn", _configUI.Draw, true, new(300, 300));
     }
 
+    private void OpenMainUI()
+    {
+        if (_initialized && !_runtimeDisposed) OpenConfigUI();
+    }
+
     private void DrawUI()
+    {
+        if (!_initialized || _runtimeDisposed)
+            return;
+
+        // DTR.Update opens an ImGui popup, so it must stay in the draw callback.
+        _dtr.Update();
+        var uiHidden = Service.GameGui.GameUiHidden || Service.Condition[ConditionFlag.OccupiedInCutSceneEvent] || Service.Condition[ConditionFlag.WatchingCutscene78] || Service.Condition[ConditionFlag.WatchingCutscene];
+        UpdateScreenRiskBorder(uiHidden);
+        if (!uiHidden)
+            Service.WindowSystem?.Draw();
+        Camera.Instance?.DrawWorldPrimitives();
+    }
+
+    // World observation, mechanic deadlines and movement must run on game
+    // updates even when rendering is paused (background/minimized/hidden UI).
+    private void UpdateRuntime()
     {
         var tsStart = DateTime.Now;
         var moveImminent = _movementOverride.IsMoveRequested() && (!_amex.PreventMovingWhileCasting || _movementOverride.IsForceUnblocked());
 
-        _dtr.Update();
         Camera.Instance?.Update();
         _wsSync.Update(_prevUpdateTime);
         _partyRoles.Update();
         _bossmod.Update();
         _zonemod.ActiveModule?.Update();
         _hintsBuilder.Update(_hints, PartyState.PlayerSlot, moveImminent);
+        // 机制转火“只选一次”是斗兽专用逻辑；对其他模块启用会锁死自动选敌（如 90 级副本 BOSS 战站桩不打）。
+        var mechanicModule = _bossmod.ActiveModule;
+        if (mechanicModule?.StateMachine.ActivePhase == null || !MechanicTargetSelection.Supports(mechanicModule))
+            mechanicModule = null;
+        _mechanicTargets.Apply(_hints, mechanicModule, _ws.Party.Player(), CanSelectTarget);
         _amex.QueueManualActions();
         _rotation.Update(_amex.AnimationLockDelayEstimate, _movementOverride.IsMoving(), Service.Condition[ConditionFlag.DutyRecorderPlayback]);
         _ai.Update();
         _broadcast.Update();
         _amex.FinishActionGather();
-
-        var uiHidden = Service.GameGui.GameUiHidden || Service.Condition[ConditionFlag.OccupiedInCutSceneEvent] || Service.Condition[ConditionFlag.WatchingCutscene78] || Service.Condition[ConditionFlag.WatchingCutscene];
-        UpdateScreenRiskBorder(uiHidden);
-        if (!uiHidden)
+        if (!_gameplayEnabled)
         {
-            Service.WindowSystem?.Draw();
+            _amex.SetGameplayEnabled(true);
+            _movementOverride.SetGameplayEnabled(true);
+            _gameplayEnabled = true;
         }
 
         ExecuteHints();
-
-        Camera.Instance?.DrawWorldPrimitives();
         _prevUpdateTime = DateTime.Now - tsStart;
+    }
+
+    private void OnFrameworkUpdate(IFramework framework)
+    {
+        if (_runtimeDisposed)
+            return;
+        if (!_initialized)
+        {
+            if (!_initializationAttempted)
+            {
+                _initializationAttempted = true;
+                try { InitOnFrameworkThread(); }
+                catch (Exception ex)
+                {
+                    Service.Logger.Error(ex, "BossMod initialization failed");
+                    DisposeRuntime();
+                }
+            }
+            return;
+        }
+        var player = Service.PlayerState;
+        var loggedIn = Service.ClientState.IsLoggedIn;
+        // Loading/territory transitions can temporarily remove PlayerState.
+        // Pause input until the player returns, while preserving AI ON.
+        if (loggedIn && (!player.IsLoaded || player.ContentId == 0))
+        {
+            if (_initialized)
+            {
+                _amex.SetGameplayEnabled(false);
+                _movementOverride.SetGameplayEnabled(false);
+                _ai.Suspend();
+                _hints.Clear();
+                _gameplayEnabled = false;
+                _wsSync.Update(_prevUpdateTime);
+            }
+            return;
+        }
+        if (!loggedIn)
+        {
+            if (_gameplayEnabled)
+            {
+                _amex.SetGameplayEnabled(false);
+                _movementOverride.SetGameplayEnabled(false);
+                _gameplayEnabled = false;
+            }
+            _ai.SwitchToIdle();
+            _hints.Clear();
+            _wsSync.Update(_prevUpdateTime);
+            return;
+        }
+        UpdateRuntime();
     }
 
     private void UpdateScreenRiskBorder(bool uiHidden)
@@ -376,7 +477,12 @@ public sealed class Plugin : IAsyncDalamudPlugin
         _movementOverride.DesiredSpinDirection = _hints.SpinDirection;
 
         var targetSystem = FFXIVClientStructs.FFXIV.Client.Game.Control.TargetSystem.Instance();
-        SetTarget(_hints.ForcedTarget, &targetSystem->Target);
+        var forcedObject = SelectableTarget(_hints.ForcedTarget);
+        var targetChanged = _targetSelection.Update(_hints.ForcedTarget?.InstanceID ?? 0, forcedObject != null);
+        if (forcedObject != null && (_hints.PreserveTarget || targetChanged))
+            targetSystem->Target = forcedObject;
+        if (_hints.ClearTargetID != 0 && targetSystem->Target != null && targetSystem->Target->EntityId == _hints.ClearTargetID)
+            targetSystem->Target = null;
         SetTarget(_hints.ForcedFocusTarget, &targetSystem->FocusTarget);
 
         foreach (var s in _hints.StatusesToCancel)
@@ -431,12 +537,24 @@ public sealed class Plugin : IAsyncDalamudPlugin
 
     private unsafe void SetTarget(Actor? target, FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject** targetPtr)
     {
+        var obj = SelectableTarget(target);
+        if (obj != null) *targetPtr = obj;
+    }
+
+    private unsafe bool CanSelectTarget(Actor target) => SelectableTarget(target) != null;
+
+    private unsafe FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject* SelectableTarget(Actor? target)
+    {
         if (target == null || !target.IsTargetable)
         {
-            return;
+            return null;
         }
 
         var obj = GetActorObject(target);
+        if (obj == null)
+        {
+            return null; // A stale request must not clear another plugin's or the player's current target.
+        }
 
         // 50 in-game units is the maximum distance before nameplates stop rendering (making the mob effectively untargetable)
         // targeting a mob that isn't visible is bad UX
@@ -445,9 +563,10 @@ public sealed class Plugin : IAsyncDalamudPlugin
             var distSq = (player.PosRot.XYZ() - target.PosRot.XYZ()).LengthSquared();
             if (distSq < 2500f)
             {
-                *targetPtr = obj;
+                return obj;
             }
         }
+        return null;
     }
 
     private unsafe bool CheckInteractRange(Actor? player, Actor? target)
@@ -488,25 +607,25 @@ public sealed class Plugin : IAsyncDalamudPlugin
         }
     }
 
-    private unsafe FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject* GetActorObject(Actor? actor)
+    private static unsafe FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject* GetActorObject(Actor? actor)
+        => FindActorObject(actor, FFXIVClientStructs.FFXIV.Client.Game.Object.GameObjectManager.Instance());
+
+    internal static unsafe FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject* FindActorObject(Actor? actor, FFXIVClientStructs.FFXIV.Client.Game.Object.GameObjectManager* manager)
     {
-        if (actor == null)
+        if (actor == null || actor.IsDestroyed || actor.InstanceID is 0 or 0xE0000000 || manager == null)
         {
             return null;
         }
 
-        var obj = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObjectManager.Instance()->Objects.IndexSorted[actor.SpawnIndex].Value;
-        if (obj == null)
+        var objects = manager->Objects.IndexSorted;
+        if ((uint)actor.SpawnIndex >= (uint)objects.Length)
         {
             return null;
         }
 
-        if (obj->EntityId != actor.InstanceID)
-        {
-            Service.Log($"[ExecHints] Unexpected actor: expected {actor.InstanceID:X} at #{actor.SpawnIndex}, but found {obj->EntityId:X}");
-        }
-
-        return obj;
+        // Object-table slots are reused. Never target or interact with the replacement occupant.
+        var obj = objects[actor.SpawnIndex].Value;
+        return obj != null && obj->EntityId == actor.InstanceID ? obj : null;
     }
 
     private void ParseAutorotationCommands(string[] cmd)

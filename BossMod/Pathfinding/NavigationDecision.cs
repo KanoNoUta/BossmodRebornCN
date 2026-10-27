@@ -30,13 +30,27 @@ public struct NavigationDecision
 
     public const float ActivationTimeCushion = 1f; // reduce time between now and activation by this value in seconds; increase for more conservativeness
 
+    // 方案2：目标圈被禁区大面积覆盖时放弃该目标圈的阈值。
+    // 若某目标圈的"安全格数 / 圈内总格数"低于此值，说明该目标圈绝大部分面积在禁区内，
+    // 继续以其为寻路目标会把目的地选在禁区边界最近的安全格，且禁区栅格随倒计时逐帧变化导致目的地跳动（移动抽搐），
+    // 此时本轮整圈跳过不写入 PixelPriority（等价于放弃该目标，只求存活）。圈内总格数为 0 时不视为放弃。
+    private const float MinSafeGoalFraction = 0.25f;
+
     public static NavigationDecision Build(Context ctx, DateTime currentTime, AIHints hints, Actor player, float playerSpeed = 6f, float forbiddenZoneCushion = default)
+    {
+        var rasterTime = Prepare(ctx, currentTime, hints, player, playerSpeed, forbiddenZoneCushion);
+        var start = Stopwatch.GetTimestamp();
+        return Finish(ctx, player.Position, ctx.ThetaStar.Execute(), rasterTime, Stopwatch.GetTimestamp() - start);
+    }
+
+    private static long Prepare(Context ctx, DateTime currentTime, AIHints hints, Actor player, float playerSpeed, float forbiddenZoneCushion)
     {
         var startTime = Stopwatch.GetTimestamp();
 
         hints.InitPathfindMap(ctx.Map);
         var pos = player.Position;
-        // make local copies of forbidden zones and goals to ensure no race conditions during async pathfinding
+        // Called on the framework thread. Parallel rasterization finishes before
+        // returning, so live actors and goal closures cannot change mid-frame.
         if (hints.TemporaryObstacles.Count != 0)
         {
             RasterizeVoidzones(ctx.Map, [.. hints.TemporaryObstacles]);
@@ -67,15 +81,69 @@ public struct NavigationDecision
             ctx.Map.BuildTeleporterEdges([.. hints.Teleporters]);
         }
 
-        var rasterFinish = Stopwatch.GetTimestamp();
+        ctx.ThetaStar.Start(ctx.Map, pos, 1f / (float.IsFinite(playerSpeed) && playerSpeed > 0 ? playerSpeed : 6f));
+        return Stopwatch.GetTimestamp() - startTime;
+    }
 
-        // execute pathfinding
-        ctx.ThetaStar.Start(ctx.Map, pos, 1f / playerSpeed);
-        var bestNodeIndex = ctx.ThetaStar.Execute();
+    private static NavigationDecision Finish(Context ctx, WPos pos, int bestNodeIndex, long rasterTime, long pathfindTime)
+    {
         ref var bestNode = ref ctx.ThetaStar.NodeByIndex(bestNodeIndex);
         var waypoints = GetFirstWaypoints(ctx.ThetaStar, ctx.Map, bestNodeIndex, pos);
-        var finishTime = Stopwatch.GetTimestamp();
-        return new NavigationDecision() { Destination = waypoints.first, NextWaypoint = waypoints.second, LeewaySeconds = bestNode.PathLeeway, TimeToGoal = bestNode.GScore, PathfindTime = finishTime - rasterFinish, RasterizeTime = rasterFinish - startTime };
+        return new() { Destination = waypoints.first, NextWaypoint = waypoints.second, LeewaySeconds = bestNode.PathLeeway, TimeToGoal = bestNode.GScore, PathfindTime = pathfindTime, RasterizeTime = rasterTime };
+    }
+
+    // Search a frozen numeric map in small slices on the framework thread. No
+    // task can retain live hints, block a semaphore, or write into a later frame.
+    public sealed class IncrementalBuilder
+    {
+        public readonly Context Context = new();
+        private bool _searching;
+        private long _started, _rasterTime, _searchTime;
+        private DateTime _worldTime;
+        private WPos _position, _center;
+        private ArenaBounds? _bounds;
+        public bool PreviousDecisionValid { get; private set; }
+
+        public void Reset() => _searching = PreviousDecisionValid = false;
+
+        public bool Update(DateTime now, AIHints hints, Actor player, float speed, float cushion, out NavigationDecision decision)
+        {
+            decision = default;
+            if (_center != hints.PathfindMapCenter || !ReferenceEquals(_bounds, hints.PathfindMapBounds)
+                || (player.Position - _position).LengthSq() > 9 || now < _worldTime)
+                Reset();
+            if (!_searching)
+            {
+                _rasterTime = Prepare(Context, now, hints, player, speed, cushion);
+                _position = player.Position;
+                _center = hints.PathfindMapCenter;
+                _bounds = hints.PathfindMapBounds;
+                _worldTime = now;
+                _started = Stopwatch.GetTimestamp();
+                _searchTime = 0;
+                _searching = true;
+            }
+            var sliceStart = Stopwatch.GetTimestamp();
+            for (var i = 0; i < 512; ++i)
+            {
+                var done = !Context.ThetaStar.ExecuteStepToGoal();
+                // Even a pathological search must yield a result and refresh
+                // its map; never keep navigating an old arena indefinitely.
+                if (done || Stopwatch.GetElapsedTime(_started).TotalMilliseconds >= 100 || (now - _worldTime).TotalMilliseconds >= 100)
+                {
+                    _searchTime += Stopwatch.GetTimestamp() - sliceStart;
+                    _searching = false;
+                    PreviousDecisionValid = true;
+                    decision = Finish(Context, _position, Context.ThetaStar.BestIndex(), _rasterTime, _searchTime);
+                    decision.LeewaySeconds -= (float)(now - _worldTime).TotalSeconds;
+                    return true;
+                }
+                if (Stopwatch.GetElapsedTime(sliceStart).TotalMilliseconds >= 2)
+                    break;
+            }
+            _searchTime += Stopwatch.GetTimestamp() - sliceStart;
+            return false;
+        }
     }
 
     private static void AvoidForbiddenZone(Map map, float forbiddenZoneCushion)
@@ -166,7 +234,7 @@ public struct NavigationDecision
                     init = globalMax;
                     newVal = localMax > init ? localMax : init;
                 }
-                while (init != Interlocked.CompareExchange(ref globalMax, newVal, init));
+                while (!init.Equals(Interlocked.CompareExchange(ref globalMax, newVal, init)));
             });
 
         map.MaxPriority = globalMax;
@@ -449,10 +517,20 @@ public struct NavigationDecision
         var pixelMaxG = map.PixelMaxG;
         var pixelPriority = map.PixelPriority;
 
-        Parallel.ForEach(rangePartitioner, static () => float.MinValue, (range, loopState, localMax) =>
+        // 方案2：目标圈被禁区大面积覆盖时放弃该目标圈。
+        // 在现有栅格化循环内顺便统计每个目标圈的"圈内总格数"与"圈内安全格数"（不新增全图扫描），
+        // 若某目标圈安全格占比过低（绝大部分面积在禁区内），继续以其为寻路目标会把目的地选在禁区边界
+        // 最近的安全格，且禁区栅格随倒计时逐帧变化，导致目的地跳动（移动抽搐），故本轮整圈放弃该目标圈。
+        var totalCounts = new int[len];
+        var safeCounts = new int[len];
+
+        Parallel.ForEach(rangePartitioner, () => (LocalMax: float.MinValue, Total: new int[len], Safe: new int[len]), (range, loopState, acc) =>
             {
                 var ys = range.Item1;
                 var ye = range.Item2;
+                var localTotal = acc.Total;
+                var localSafe = acc.Safe;
+                var localMax = acc.LocalMax;
 
                 var rows = Math.Max(0, Math.Min(ye, height) - ys);
                 var scratchRows = rows + 1; // extra row for bottom corners
@@ -474,7 +552,7 @@ public struct NavigationDecision
                         var leftP = 0f;
                         for (var i = 0; i < len; ++i)
                         {
-                            leftP += goals[i](leftPos);
+                            leftP += FiniteGoal(goals[i], leftPos);
                         }
 
                         for (var x = 0; x < width; ++x)
@@ -483,7 +561,7 @@ public struct NavigationDecision
                             var rightP = 0f;
                             for (var i = 0; i < len; ++i)
                             {
-                                rightP += goals[i](rightPos);
+                                rightP += FiniteGoal(goals[i], rightPos);
                             }
 
                             localScratch[baseIdx + x] = Math.Min(leftP, rightP);
@@ -493,7 +571,7 @@ public struct NavigationDecision
                         }
                     }
 
-                    // produce final cell priorities
+                    // produce final cell priorities; 同时在现有循环内顺便统计每个目标圈的覆盖格数与安全格数
                     for (var y = ys; y < ye; ++y)
                     {
                         var rowBase = (y - ys) * width;
@@ -515,27 +593,152 @@ public struct NavigationDecision
                             {
                                 localMax = cellP;
                             }
+
+                            // 统计：该格是否被各目标圈覆盖（用格中心近似判定），以及该格是否安全（未被禁区覆盖）
+                            var cellCenter = topLeft + (y + 0.5f) * dy + (x + 0.5f) * dx;
+                            var isSafe = pixelMaxG[idx] == float.MaxValue;
+                            for (var i = 0; i < len; ++i)
+                            {
+                                if (FiniteGoal(goals[i], cellCenter) > 0f)
+                                {
+                                    ++localTotal[i];
+                                    if (isSafe)
+                                    {
+                                        ++localSafe[i];
+                                    }
+                                }
+                            }
                         }
                     }
-                    return localMax;
+                    return (localMax, localTotal, localSafe);
                 }
                 finally
                 {
                     ArrayPool<float>.Shared.Return(localScratch, clearArray: false);
                 }
             },
+            acc =>
+            {
+                // 合并各分区的局部统计与局部最大值
+                for (var i = 0; i < len; ++i)
+                {
+                    Interlocked.Add(ref totalCounts[i], acc.Total[i]);
+                    Interlocked.Add(ref safeCounts[i], acc.Safe[i]);
+                }
+                float initVal, newVal;
+                do
+                {
+                    initVal = globalMaxPriority;
+                    newVal = Math.Max(initVal, acc.LocalMax);
+                }
+                while (!initVal.Equals(Interlocked.CompareExchange(ref globalMaxPriority, newVal, initVal)));
+            });
+
+        map.MaxPriority = globalMaxPriority;
+
+        // 判定被放弃的目标圈：圈内总格数 > 0 且安全格占比低于阈值。
+        // 圈内总格数为 0（无格子可统计，如目标圈完全在地图外）时不视为放弃，维持原行为。
+        var abandoned = new bool[len];
+        var anyAbandoned = false;
+        for (var i = 0; i < len; ++i)
+        {
+            if (totalCounts[i] > 0 && safeCounts[i] < totalCounts[i] * MinSafeGoalFraction)
+            {
+                abandoned[i] = true;
+                anyAbandoned = true;
+            }
+        }
+
+        if (!anyAbandoned)
+        {
+            return;
+        }
+
+        // 修正：把被放弃目标圈覆盖的安全格优先级重算（跳过被放弃目标圈的贡献），并同步更新全局最大优先级
+        var newGlobalMax = float.MinValue;
+        Parallel.ForEach(rangePartitioner, () => float.MinValue, (range, loopState, localMax) =>
+            {
+                var ys = range.Item1;
+                var ye = range.Item2;
+
+                for (var y = ys; y < ye; ++y)
+                {
+                    var idx = y * width;
+                    for (var x = 0; x < width; ++x, ++idx)
+                    {
+                        if (pixelMaxG[idx] != float.MaxValue)
+                        {
+                            continue; // 危险格保持原样（优先级为 0，不影响全局最大值）
+                        }
+
+                        var cellCenter = topLeft + (y + 0.5f) * dy + (x + 0.5f) * dx;
+                        var coveredByAbandoned = false;
+                        for (var i = 0; i < len; ++i)
+                        {
+                            if (abandoned[i] && FiniteGoal(goals[i], cellCenter) > 0f)
+                            {
+                                coveredByAbandoned = true;
+                                break;
+                            }
+                        }
+
+                        float cellP;
+                        if (coveredByAbandoned)
+                        {
+                            // 重算该格优先级：4 角求值（跳过被放弃目标圈）
+                            var tl = topLeft + y * dy + x * dx;
+                            var tr = tl + dx;
+                            var bl = tl + dy;
+                            var br = bl + dx;
+                            var tlP = 0f;
+                            var trP = 0f;
+                            var blP = 0f;
+                            var brP = 0f;
+                            for (var i = 0; i < len; ++i)
+                            {
+                                if (abandoned[i])
+                                {
+                                    continue;
+                                }
+                                tlP += FiniteGoal(goals[i], tl);
+                                trP += FiniteGoal(goals[i], tr);
+                                blP += FiniteGoal(goals[i], bl);
+                                brP += FiniteGoal(goals[i], br);
+                            }
+                            cellP = Math.Min(Math.Min(tlP, trP), Math.Min(blP, brP));
+                            pixelPriority[idx] = cellP;
+                        }
+                        else
+                        {
+                            cellP = pixelPriority[idx];
+                        }
+
+                        if (cellP > localMax)
+                        {
+                            localMax = cellP;
+                        }
+                    }
+                }
+                return localMax;
+            },
             localMax =>
             {
                 float initVal, newVal;
                 do
                 {
-                    initVal = globalMaxPriority;
+                    initVal = newGlobalMax;
                     newVal = Math.Max(initVal, localMax);
                 }
-                while (initVal != Interlocked.CompareExchange(ref globalMaxPriority, newVal, initVal));
+                while (!initVal.Equals(Interlocked.CompareExchange(ref newGlobalMax, newVal, initVal)));
             });
 
-        map.MaxPriority = globalMaxPriority;
+        map.MaxPriority = newGlobalMax;
+    }
+
+    private static float FiniteGoal(Func<WPos, float> goal, WPos pos)
+    {
+        var value = goal(pos);
+        return float.IsFinite(value) ? value : 0;
     }
 
     public static void RasterizeVoidzones(Map map, ShapeDistance[] zones)

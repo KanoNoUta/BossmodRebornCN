@@ -15,6 +15,7 @@ sealed class AIManager : IDisposable
     public int MasterSlot = PartyState.PlayerSlot; // non-zero means corresponding player is master
     public AIBehaviour? Beh;
     public Preset? AiPreset;
+    private DateTime _nextNavigationErrorLog;
 
     public WorldState WorldState => Autorot.Bossmods.WorldState;
     public float ForceMovementIn => Beh?.ForceMovementIn ?? float.MaxValue;
@@ -46,19 +47,29 @@ sealed class AIManager : IDisposable
 
     public void Update()
     {
-        if (!WorldState.Party.Members[MasterSlot].IsValid())
-        {
-            SwitchToIdle();
-        }
-
         var player = WorldState.Party.Player();
         var master = WorldState.Party[MasterSlot];
         if (Beh != null && player != null && master != null && !WorldState.Party.Members[PartyState.PlayerSlot].InCutscene)
         {
-            _ = Beh.Execute(player, master);
+            try
+            {
+                Beh.Execute(player, master);
+            }
+            catch (Exception ex)
+            {
+                Controller.Clear();
+                if (WorldState.CurrentTime >= _nextNavigationErrorLog)
+                {
+                    Service.Log($"[BMRAI] navigation update failed; retrying next frame: {ex}");
+                    _nextNavigationErrorLog = WorldState.FutureTime(5);
+                }
+            }
         }
         else
         {
+            // Missing actors during a transition suspend follow mode. Only an
+            // explicit idle/off request should destroy the selected behaviour.
+            Beh?.Suspend();
             Controller.Clear();
         }
 
@@ -73,6 +84,15 @@ sealed class AIManager : IDisposable
         Autorot.Preset = null;
         Controller.Clear();
         _wndAI.UpdateTitle();
+    }
+
+    public void Suspend()
+    {
+        // Only drop the preset AI itself applied; a manually selected preset survives loading screens.
+        if (Beh != null && Autorot.Preset == Beh.AIPreset)
+            Autorot.Preset = null;
+        Beh?.Suspend();
+        Controller.Clear();
     }
 
     public void SwitchToFollow(int masterSlot)
@@ -200,9 +220,10 @@ sealed class AIManager : IDisposable
                 configModified = cfgPositional != _config.DesiredPositional;
                 break;
             case "MAXDISTANCETARGET":
-                var cfgMDT = _config.MaxDistanceToTarget;
+                var cfgMDTMelee = _config.MeleeMaxDistanceToTarget;
+                var cfgMDTRanged = _config.RangedMaxDistanceToTarget;
                 HandleMaxDistanceTargetCommand(messageData);
-                configModified = cfgMDT != _config.MaxDistanceToTarget;
+                configModified = cfgMDTMelee != _config.MeleeMaxDistanceToTarget || cfgMDTRanged != _config.RangedMaxDistanceToTarget;
                 break;
             case "MAXDISTANCESLOT":
                 var cfgMDS = _config.MaxDistanceToSlot;
@@ -664,10 +685,15 @@ sealed class AIManager : IDisposable
             return;
         }
 
-        _config.MaxDistanceToTarget = distance;
+        var player = WorldState.Party.Player();
+        var isMelee = player == null || player.Role is Role.Melee or Role.Tank;
+        if (isMelee)
+            _config.MeleeMaxDistanceToTarget = distance;
+        else
+            _config.RangedMaxDistanceToTarget = distance;
         if (_config.EchoToChat)
         {
-            Service.ChatGui.Print($"[BMRAI] Max distance to target set to {distance.ToString(System.Globalization.CultureInfo.InvariantCulture)}y");
+            Service.ChatGui.Print($"[BMRAI] {(isMelee ? "近战/坦克" : "远程/治疗")}到目标的最大距离已设为 {distance.ToString(System.Globalization.CultureInfo.InvariantCulture)}y");
         }
     }
 
